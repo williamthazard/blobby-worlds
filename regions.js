@@ -391,6 +391,11 @@ const Regions = (() => {
     return out;
   }
 
+  function hash2(a, b) {
+    const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
+  }
+
   // ---------- Monumental Landmarks & Sunken City Builder ----------
 
   function buildWorldLandmarks(scene, heightAt, terrainNormalAt, textures) {
@@ -404,7 +409,16 @@ const Regions = (() => {
       return { group, relicObj, secretObjs, animated };
     }
 
-    const sets = (textures && textures.sets) || {};
+    const texRef = textures || (typeof Textures !== 'undefined' ? Textures : null);
+    const shaderRef = typeof Shaders !== 'undefined' ? Shaders : null;
+    const envRef = typeof Env !== 'undefined' ? Env : null;
+    const sets = (texRef && texRef.sets) || {};
+    const oakCardTex = (texRef && texRef.oakLeafCard) || null;
+    const hasBufferGeo = typeof THREE.BufferGeometry === 'function' &&
+      typeof THREE.BufferAttribute === 'function' &&
+      typeof Float32Array === 'function' &&
+      typeof Uint16Array === 'function';
+
     const makeMat = (setName, hex, rough, metal = 0.04, extra = null) => {
       const s = sets[setName];
       const opts = {
@@ -424,12 +438,17 @@ const Regions = (() => {
 
     const ruinStone = makeMat('stone', 0xc9c4b8, 0.86);
     const mossyStone = makeMat('stone', 0x9fa892, 0.88);
+    const coastalStone = makeMat('stone', 0x6f848c, 0.80);
     const sandstone = makeMat('rock', 0xd69666, 0.84);
     const frostStone = makeMat('stone', 0xc8d8e6, 0.72);
     const sunkenStone = makeMat('stone', 0x7c9ca4, 0.78);
     const woodMat = makeMat('bark', 0x9b7650, 0.90);
     const treeBark = makeMat('bark', 0x7a563a, 0.92);
+    const ropeMat = makeMat(null, 0xaa8c60, 0.92, 0.02);
     const goldMat = makeMat(null, 0xf2c85b, 0.28, 0.72, { emissive: 0x452d04, emissiveIntensity: 0.4 });
+    const runeGoldMat = makeMat(null, 0xffdc70, 0.24, 0.62, { emissive: 0xffb82c, emissiveIntensity: 0.75 });
+    const runeAquaMat = makeMat(null, 0x78f8f0, 0.20, 0.45, { emissive: 0x26ded8, emissiveIntensity: 0.85 });
+    const runeIceMat = makeMat(null, 0xbcf0ff, 0.20, 0.45, { emissive: 0x56c8ff, emissiveIntensity: 0.82 });
     const crystalGold = makeMat(null, 0xffe066, 0.16, 0.25, { emissive: 0xffb824, emissiveIntensity: 1.15 });
     const crystalAqua = makeMat(null, 0x76f6ef, 0.14, 0.22, { emissive: 0x26d8d4, emissiveIntensity: 1.35 });
     const crystalIce = makeMat(null, 0xb8eeff, 0.14, 0.20, { emissive: 0x52c4ff, emissiveIntensity: 1.1 });
@@ -437,11 +456,55 @@ const Regions = (() => {
     const coralAmber = makeMat('rock', 0xf59e56, 0.68, 0.02, { emissive: 0x4a2208, emissiveIntensity: 0.32 });
     const coralViolet = makeMat('rock', 0xa87ee8, 0.68, 0.02, { emissive: 0x2e1a52, emissiveIntensity: 0.38 });
     const kelpGlow = makeMat(null, 0x46e6b8, 0.42, 0.05, { emissive: 0x1eb892, emissiveIntensity: 0.85, side: THREE.DoubleSide });
-    const leafCanopy = makeMat('leaves', 0x4e8a42, 0.78, 0.0);
+    const lilypadMat = makeMat('leaves', 0x4b8f48, 0.46, 0.02, { side: THREE.DoubleSide });
+    const lotusMat = makeMat(null, 0xf492b8, 0.42, 0.02, { emissive: 0x3b1224, emissiveIntensity: 0.24, side: THREE.DoubleSide });
+    const oasisReedMat = makeMat('grass', 0x6ea64d, 0.82, 0.0, { side: THREE.DoubleSide });
+
+    const greatTreeLeafMat = new THREE.MeshStandardMaterial({
+      color: oakCardTex ? 0xffffff : 0x4b9445,
+      map: oakCardTex,
+      alphaTest: oakCardTex ? 0.40 : 0,
+      side: THREE.DoubleSide,
+      roughness: 0.76,
+      metalness: 0.0,
+      vertexColors: hasBufferGeo,
+    });
+    if (greatTreeLeafMat.color && typeof greatTreeLeafMat.color.convertSRGBToLinear === 'function') {
+      greatTreeLeafMat.color.convertSRGBToLinear();
+    }
+
+    const oasisLeafMat = new THREE.MeshStandardMaterial({
+      color: oakCardTex ? 0xffffff : 0x569e4a,
+      map: oakCardTex,
+      alphaTest: oakCardTex ? 0.40 : 0,
+      side: THREE.DoubleSide,
+      roughness: 0.78,
+      metalness: 0.0,
+      vertexColors: hasBufferGeo,
+    });
+    if (oasisLeafMat.color && typeof oasisLeafMat.color.convertSRGBToLinear === 'function') {
+      oasisLeafMat.color.convertSRGBToLinear();
+    }
+
+    if (shaderRef) {
+      if (typeof shaderRef.patchUnderwaterCaustics === 'function') {
+        shaderRef.patchUnderwaterCaustics(sunkenStone, { intensity: 0.82 });
+        shaderRef.patchUnderwaterCaustics(coralRose, { intensity: 0.56 });
+        shaderRef.patchUnderwaterCaustics(coralAmber, { intensity: 0.56 });
+        shaderRef.patchUnderwaterCaustics(coralViolet, { intensity: 0.56 });
+      }
+      if (typeof shaderRef.patchTreeWind === 'function') {
+        shaderRef.patchTreeWind(greatTreeLeafMat, true);
+        shaderRef.patchTreeWind(oasisLeafMat, true);
+      }
+      if (typeof shaderRef.patchFoliageReactive === 'function') {
+        shaderRef.patchFoliageReactive(oasisReedMat, { amp: 0.14, heightScale: 1.15, useUvY: true });
+      }
+    }
 
     const makeGlow = (color, size, opacity) => {
-      if (typeof Shaders !== 'undefined' && Shaders && typeof Shaders.createGlowSprite === 'function') {
-        const sp = Shaders.createGlowSprite(color, size, opacity, true);
+      if (shaderRef && typeof shaderRef.createGlowSprite === 'function') {
+        const sp = shaderRef.createGlowSprite(color, size, opacity, true);
         sp.castShadow = false;
         sp.receiveShadow = false;
         return sp;
@@ -460,49 +523,355 @@ const Regions = (() => {
       m.scale.set(sx, sy, sz);
       m.castShadow = true;
       m.receiveShadow = true;
+      if (mat === sunkenStone) m.userData.sunkenStoneMesh = true;
       parent.add(m);
       return m;
     };
 
+    const mountSwappableProp = (key, fallbackBuilder, x, y, z, ry, targetH, extraOpts) => {
+      const holder = new THREE.Group();
+      holder.position.set(x, y, z);
+      holder.rotation.y = ry || 0;
+      holder.userData.propKey = key;
+      group.add(holder);
+
+      const fallback = new THREE.Group();
+      fallback.userData.isPlaceholder = true;
+      holder.add(fallback);
+
+      const isMat = extraOpts && (extraOpts.isMaterial || extraOpts instanceof THREE.MeshStandardMaterial);
+      const cfg = isMat ? { mat: extraOpts } : (extraOpts || {});
+
+      if (typeof fallbackBuilder === 'function') {
+        fallbackBuilder(fallback, cfg.mat || null);
+      }
+
+      if (envRef && typeof envRef.registerNodeSwap === 'function') {
+        const swapOpts = {
+          fallback,
+          keepNonPlaceholders: true,
+          castShadow: cfg.castShadow !== undefined ? cfg.castShadow : true,
+          receiveShadow: cfg.receiveShadow !== undefined ? cfg.receiveShadow : true,
+          deps: {
+            THREE,
+            Shaders: shaderRef,
+            Textures: texRef,
+          },
+        };
+        if (cfg.scale !== undefined) swapOpts.scale = cfg.scale;
+        else swapOpts.targetHeight = targetH;
+        if (cfg.caustics) swapOpts.caustics = true;
+        envRef.registerNodeSwap(key, holder, swapOpts);
+      }
+      return holder;
+    };
+
+    // Botanical curved leaf-card geometry helpers (merged 1-draw-call crown when BufferGeometry exists, PlaneGeometry fallback otherwise)
+    const buildCurvedLeafCardGeo = (w, h, bend, ox, oy, oz, yaw, pitch, roll, centerY, shadeR, shadeG, shadeB) => {
+      const pos = new Float32Array(9 * 3);
+      const norm = new Float32Array(9 * 3);
+      const uv = new Float32Array(9 * 2);
+      const col = new Float32Array(9 * 3);
+      const cy = Math.cos(yaw), sy = Math.sin(yaw);
+      const cp = Math.cos(pitch), sp = Math.sin(pitch);
+      const cr = Math.cos(roll), sr = Math.sin(roll);
+
+      let vi = 0;
+      for (let iy = 0; iy < 3; iy++) {
+        const v = iy * 0.5;
+        const ly = (v - 0.5) * h;
+        for (let ix = 0; ix < 3; ix++) {
+          const u = ix * 0.5;
+          const lx = (u - 0.5) * w;
+          const dx = u - 0.5;
+          const dy = v - 0.5;
+          const lz = bend * (0.25 - dx * dx - dy * dy);
+
+          const x1 = lx * cr - ly * sr;
+          const y1 = lx * sr + ly * cr;
+          const z1 = lz;
+
+          const x2 = x1;
+          const y2 = y1 * cp - z1 * sp;
+          const z2 = y1 * sp + z1 * cp;
+
+          const wx = x2 * cy + z2 * sy + ox;
+          const wy = y2 + oy;
+          const wz = -x2 * sy + z2 * cy + oz;
+
+          pos[vi * 3] = wx;
+          pos[vi * 3 + 1] = wy;
+          pos[vi * 3 + 2] = wz;
+
+          const nx = wx;
+          const ny = (wy - centerY) + 0.85;
+          const nz = wz;
+          const nl = Math.hypot(nx, ny, nz) || 1;
+          norm[vi * 3] = nx / nl;
+          norm[vi * 3 + 1] = ny / nl;
+          norm[vi * 3 + 2] = nz / nl;
+
+          uv[vi * 2] = u;
+          uv[vi * 2 + 1] = v;
+
+          const sunLift = 0.72 + 0.38 * smoothstep(centerY - 3.2, centerY + 3.6, wy);
+          col[vi * 3] = shadeR * sunLift;
+          col[vi * 3 + 1] = shadeG * sunLift;
+          col[vi * 3 + 2] = shadeB * sunLift;
+          vi++;
+        }
+      }
+
+      const idx = new Uint16Array([
+        0, 1, 3, 1, 4, 3,
+        1, 2, 4, 2, 5, 4,
+        3, 4, 6, 4, 7, 6,
+        4, 5, 7, 5, 8, 7,
+      ]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(norm, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      return g;
+    };
+
+    const mergeBufferGeos = (geos) => {
+      let totalVerts = 0;
+      let totalIdx = 0;
+      for (let i = 0; i < geos.length; i++) {
+        totalVerts += geos[i].attributes.position.count;
+        totalIdx += geos[i].index.count;
+      }
+      const pos = new Float32Array(totalVerts * 3);
+      const norm = new Float32Array(totalVerts * 3);
+      const uv = new Float32Array(totalVerts * 2);
+      const col = new Float32Array(totalVerts * 3);
+      const idx = new Uint16Array(totalIdx);
+      let vOff = 0;
+      let iOff = 0;
+      for (let gIdx = 0; gIdx < geos.length; gIdx++) {
+        const g = geos[gIdx];
+        const vCount = g.attributes.position.count;
+        pos.set(g.attributes.position.array, vOff * 3);
+        norm.set(g.attributes.normal.array, vOff * 3);
+        uv.set(g.attributes.uv.array, vOff * 2);
+        col.set(g.attributes.color.array, vOff * 3);
+        const gi = g.index.array;
+        for (let k = 0; k < gi.length; k++) {
+          idx[iOff + k] = gi[k] + vOff;
+        }
+        vOff += vCount;
+        iOff += gi.length;
+      }
+      const out = new THREE.BufferGeometry();
+      out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      out.setAttribute('normal', new THREE.BufferAttribute(norm, 3));
+      out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      out.setIndex(new THREE.BufferAttribute(idx, 1));
+      return out;
+    };
+
+    const buildBotanicalCrown = (parent, tiers, mat, centerY, seedBase, tagGreatTree = false) => {
+      if (hasBufferGeo) {
+        const parts = [];
+        let seed = seedBase;
+        for (let t = 0; t < tiers.length; t++) {
+          const rg = tiers[t];
+          for (let i = 0; i < rg.count; i++) {
+            seed++;
+            const ang = (i / rg.count) * Math.PI * 2 + t * 0.53 + (hash2(seed * 3.1, t * 7.3) - 0.5) * 0.26;
+            const rad = rg.rad * (0.85 + hash2(seed * 5.7, i * 2.3) * 0.28);
+            const ox = (rg.ox || 0) + Math.cos(ang) * rad;
+            const oz = (rg.oz || 0) + Math.sin(ang) * rad;
+            const oy = rg.y + (hash2(i * 4.1, seed * 1.9) - 0.5) * (rg.yJitter || 0.65);
+            const yaw = Math.atan2(ox - (rg.ox || 0), oz - (rg.oz || 0)) + (i % 2 === 0 ? 0.28 : -0.28);
+            const pitch = rg.pitch + (hash2(seed, t) - 0.5) * 0.34;
+            const roll = (hash2(t * 9.1, seed * 2.7) - 0.5) * 0.62;
+            const tint = 0.84 + hash2(seed * 2.3, i * 6.1) * 0.26;
+            parts.push(
+              buildCurvedLeafCardGeo(
+                rg.cardW, rg.cardH, rg.bend !== undefined ? rg.bend : 0.62,
+                ox, oy, oz, yaw, pitch, roll, centerY,
+                tint * (rg.rMul || 0.94), tint * (rg.gMul || 1.04), tint * (rg.bMul || 0.82)
+              )
+            );
+          }
+        }
+        const m = new THREE.Mesh(mergeBufferGeos(parts), mat);
+        m.castShadow = true;
+        m.receiveShadow = true;
+        if (tagGreatTree) {
+          m.userData.isGreatTreeCanopy = true;
+          m.userData.foliageTiers = tiers.length;
+        }
+        parent.add(m);
+        return m;
+      }
+
+      let seed = seedBase;
+      for (let t = 0; t < tiers.length; t++) {
+        const rg = tiers[t];
+        for (let i = 0; i < rg.count; i++) {
+          seed++;
+          const ang = (i / rg.count) * Math.PI * 2 + t * 0.53;
+          const ox = (rg.ox || 0) + Math.cos(ang) * rg.rad;
+          const oz = (rg.oz || 0) + Math.sin(ang) * rg.rad;
+          const oy = rg.y;
+          const yaw = Math.atan2(ox - (rg.ox || 0), oz - (rg.oz || 0));
+          const cardGeo = new THREE.PlaneGeometry(rg.cardW, rg.cardH, 2, 2);
+          const m = addShadowMesh(cardGeo, mat, ox, oy, oz, rg.pitch, yaw, 0, 1, 1, 1, parent);
+          if (tagGreatTree) {
+            m.userData.isGreatTreeCanopy = true;
+            m.userData.foliageTiers = tiers.length;
+          }
+        }
+      }
+      return parent;
+    };
+
     // Shared landmark geometries (minimizes allocations & shader switches)
-    const gCol = new THREE.CylinderGeometry(0.46, 0.56, 1.0, 10);
-    const gCap = new THREE.BoxGeometry(1.45, 0.36, 1.45);
-    const gPlinth = new THREE.CylinderGeometry(1.0, 1.15, 1.0, 10);
+    const gCol = new THREE.CylinderGeometry(0.42, 0.50, 1.0, 12);
+    const gCap = new THREE.BoxGeometry(1.38, 0.30, 1.38);
+    const gPlinth = new THREE.BoxGeometry(1.28, 0.28, 1.28);
+    const gMolding = new THREE.CylinderGeometry(0.54, 0.68, 0.24, 12);
     const gBox = new THREE.BoxGeometry(1, 1, 1);
     const gRing = new THREE.TorusGeometry(1.0, 0.09, 8, 22);
     const gOrb = new THREE.OctahedronGeometry(0.55, 1);
-    const gCoralFan = new THREE.DodecahedronGeometry(0.65, 0);
+    const gCoralFan = new THREE.OctahedronGeometry(0.62, 1);
     const gArch = new THREE.TorusGeometry(1.0, 0.22, 8, 18, Math.PI);
+    const gPedShaft = new THREE.CylinderGeometry(0.46, 0.60, 1.0, 8);
+    const gPedCrown = new THREE.CylinderGeometry(0.72, 0.48, 0.30, 8);
+    const gPedBase = new THREE.CylinderGeometry(0.88, 1.08, 0.34, 8);
 
-    const placeColumn = (x, z, height, mat, standableTop = true) => {
-      const y0 = heightAt(x, z);
-      addShadowMesh(gPlinth, mat, x, y0 + 0.35, z, 0, 0, 0, 0.72, 0.7, 0.72);
-      addShadowMesh(gCol, mat, x, y0 + 0.35 + height * 0.5, z, 0, 0, 0, 1, height, 1);
-      if (height >= 2.2) {
-        addShadowMesh(gCap, mat, x, y0 + 0.35 + height + 0.14, z);
+    const buildCarvedColumnLocal = (parent, height, mat, broken = false) => {
+      addShadowMesh(gPlinth, mat, 0, 0.14, 0, 0, 0, 0, 1, 1, 1, parent);
+      addShadowMesh(gMolding, mat, 0, 0.38, 0, 0, 0, 0, 1, 1, 1, parent);
+      const topTrim = broken ? 0.24 : 0.46;
+      const shaftH = Math.max(0.8, height - 0.48 - topTrim);
+      addShadowMesh(gCol, mat, 0, 0.48 + shaftH * 0.5, 0, 0, 0, 0, 1, shaftH, 1, parent);
+      if (broken) {
+        addShadowMesh(gCol, mat, 0.04, 0.48 + shaftH + 0.12, -0.02, 0.22, 0.4, -0.16, 0.88, 0.28, 0.84, parent);
+        addShadowMesh(gBox, mat, -0.62, 0.14, 0.46, 0.12, 0.45, 0.18, 0.38, 0.26, 0.34, parent);
+      } else {
+        addShadowMesh(gMolding, mat, 0, 0.48 + shaftH + 0.12, 0, Math.PI, 0, 0, 0.94, 0.9, 0.94, parent);
+        addShadowMesh(gCap, mat, 0, 0.48 + shaftH + 0.34, 0, 0, 0, 0, 1, 1, 1, parent);
       }
-      addCollider(x, z, 0.68, y0 + 0.35 + height + 0.32, standableTop);
-      return y0 + 0.35 + height;
     };
 
-    // 1. STAR SANCTUARY (0, 0): Compass Stone Plaza & North Starlight Arch (standable floor pads!)
+    const buildCarvedArchLocal = (parent, spanW, height, depth, mat) => {
+      const halfSpan = spanW * 0.5;
+      const colH = Math.max(2.6, height - halfSpan * 0.78);
+      const leftHolder = new THREE.Group();
+      leftHolder.position.set(-halfSpan, 0, 0);
+      parent.add(leftHolder);
+      buildCarvedColumnLocal(leftHolder, colH, mat, false);
+
+      const rightHolder = new THREE.Group();
+      rightHolder.position.set(halfSpan, 0, 0);
+      parent.add(rightHolder);
+      buildCarvedColumnLocal(rightHolder, colH, mat, false);
+
+      const archH = Math.max(1.8, height - colH);
+      addShadowMesh(gArch, mat, 0, colH - 0.06, 0, 0, 0, 0, halfSpan, archH * 0.88, depth, parent);
+      addShadowMesh(gBox, mat, 0, colH + archH * 0.86, 0, 0, 0, 0, 0.92, 0.72, depth * 0.96, parent);
+    };
+
+    const buildCarvedPedestalLocal = (parent, height, mat) => {
+      addShadowMesh(gPedBase, mat, 0, 0.17, 0, 0, 0, 0, 1, 1, 1, parent);
+      const shaftH = Math.max(0.45, height - 0.64);
+      addShadowMesh(gPedShaft, mat, 0, 0.34 + shaftH * 0.5, 0, 0, 0, 0, 1, shaftH, 1, parent);
+      addShadowMesh(gPedCrown, mat, 0, 0.34 + shaftH + 0.15, 0, 0, 0, 0, 1, 1, 1, parent);
+    };
+
+    const addStarRuneCollar = (parent, x, y, z, radius, mat, speed = 2.0, phase = 0) => {
+      const collar = addShadowMesh(gRing, mat, x, y, z, Math.PI * 0.5, 0, 0, radius, radius, 0.48, parent);
+      collar.castShadow = false;
+      collar.userData.isPlaceholder = false;
+      for (let k = 0; k < 4; k++) {
+        const a = (k / 4) * Math.PI * 2;
+        const rune = addShadowMesh(
+          gOrb, mat,
+          x + Math.cos(a) * radius, y, z + Math.sin(a) * radius,
+          0, a, 0, 0.14, 0.22, 0.14, parent
+        );
+        rune.castShadow = false;
+        rune.userData.isPlaceholder = false;
+      }
+      animated.push({
+        mesh: collar,
+        mat,
+        kind: 'pulse',
+        speed,
+        phase,
+        baseEmissive: 0.55,
+        pulseAmp: 0.60,
+        baseScale: radius,
+        baseScaleY: radius,
+      });
+      return collar;
+    };
+
+    // 1. STAR SANCTUARY (0, 0): Compass Stone Plaza, Carved North Starlight Arch & Star-Lantern Pedestals
     const hSanc = heightAt(0, 0);
     addShadowMesh(new THREE.CylinderGeometry(7.2, 7.6, 0.42, 24), ruinStone, 0, hSanc - 0.14, 0);
     addCollider(0, 0, 7.35, hSanc + 0.07, true, true);
     addShadowMesh(new THREE.CylinderGeometry(4.6, 4.7, 0.46, 16), mossyStone, 0, hSanc - 0.13, 0);
     addCollider(0, 0, 4.65, hSanc + 0.10, true, true);
-    // Flush inlaid golden compass ring sitting dead-level with inner dais top (hSanc + 0.10)
+    // Flush inlaid golden compass ring + 8 cardinal rune bezel pips sitting level with inner dais top (hSanc + 0.10)
     addShadowMesh(gRing, goldMat, 0, hSanc + 0.068, 0, Math.PI * 0.5, 0, 0, 4.4, 4.4, 0.36);
-    placeColumn(-3.6, -7.8, 4.4, ruinStone, true);
-    placeColumn(3.6, -7.8, 4.4, ruinStone, true);
-    addShadowMesh(gArch, ruinStone, 0, hSanc + 4.65, -7.8, 0, 0, 0, 3.6, 3.2, 1.3);
-    const sancCrystal = addShadowMesh(gOrb, crystalGold, 0, hSanc + 7.9, -7.8, 0, 0, 0, 0.75, 1.1, 0.75);
-    const sancHalo = makeGlow(0xffe070, 2.8, 0.65);
-    sancHalo.position.set(0, hSanc + 7.9, -7.8);
-    group.add(sancHalo);
-    animated.push({ mesh: sancCrystal, kind: 'spin', speed: 1.4, baseY: hSanc + 7.9 });
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      addShadowMesh(gBox, goldMat, Math.cos(a) * 4.4, hSanc + 0.078, Math.sin(a) * 4.4, 0, -a, 0, 0.32, 0.06, 0.16);
+    }
 
-    // 2. SUNLIT RUINS (68, -10): Mossy Colonnade Avenue & 14u Sun-Dial Obelisk
+    const sancArchHolder = mountSwappableProp(
+      'ruin_arch',
+      (fb) => buildCarvedArchLocal(fb, 7.2, 7.8, 1.3, ruinStone),
+      0, hSanc, -7.8, 0, 7.8
+    );
+    addStarRuneCollar(sancArchHolder, -3.55, 0.52, 0, 0.68, runeGoldMat, 1.8, 0.2);
+    addStarRuneCollar(sancArchHolder, 3.55, 0.52, 0, 0.68, runeGoldMat, 1.8, 1.4);
+    addCollider(-3.6, -7.8, 0.68, hSanc + 0.35 + 4.4 + 0.32, true);
+    addCollider(3.6, -7.8, 0.68, hSanc + 0.35 + 4.4 + 0.32, true);
+
+    const sancCrystal = addShadowMesh(gOrb, crystalGold, 0, hSanc + 8.55, -7.8, 0, 0, 0, 0.75, 1.1, 0.75);
+    const sancHalo = makeGlow(0xffe070, 2.8, 0.65);
+    sancHalo.position.set(0, hSanc + 8.55, -7.8);
+    group.add(sancHalo);
+    animated.push({ mesh: sancCrystal, kind: 'spin', speed: 1.4, baseY: hSanc + 8.55 });
+
+    const sancPeds = [[-4.8, -11.0], [4.8, -11.0]];
+    for (let i = 0; i < sancPeds.length; i++) {
+      const px = sancPeds[i][0];
+      const pz = sancPeds[i][1];
+      const py = heightAt(px, pz);
+      const pedH = mountSwappableProp(
+        'shrine_pedestal',
+        (fb) => buildCarvedPedestalLocal(fb, 1.55, ruinStone),
+        px, py, pz, i * Math.PI, 1.55
+      );
+      addStarRuneCollar(pedH, 0, 1.42, 0, 0.62, runeGoldMat, 2.1, i * 1.1);
+      addCollider(px, pz, 0.85, py + 1.55, true);
+      const spOrb = addShadowMesh(gOrb, crystalGold, px, py + 2.05, pz, 0, 0, 0, 0.32, 0.48, 0.32);
+      const spGlow = makeGlow(0xffe070, 1.5, 0.48);
+      spGlow.position.set(px, py + 2.05, pz);
+      group.add(spGlow);
+      animated.push({ mesh: spOrb, kind: 'spin', speed: 1.3, baseY: py + 2.05 });
+    }
+
+    // 2. SUNLIT RUINS (68, -10): Carved Colonnade Avenue, Entrance Arch & 14u Sun-Dial Obelisk
+    const hGateRuins = heightAt(50, -6);
+    mountSwappableProp(
+      'ruin_arch',
+      (fb) => buildCarvedArchLocal(fb, 6.2, 6.4, 1.2, mossyStone),
+      50, hGateRuins, -6, Math.PI * 0.5, 6.4
+    );
+    addCollider(50, -9.1, 0.68, hGateRuins + 4.0, true);
+    addCollider(50, -2.9, 0.68, hGateRuins + 4.0, true);
+
     const ruinsCols = [
       [54, -14, 4.6], [54, -2, 3.2],
       [60, -15, 5.2], [60, -3, 4.8],
@@ -511,7 +880,15 @@ const Regions = (() => {
     ];
     for (let i = 0; i < ruinsCols.length; i++) {
       const rc = ruinsCols[i];
-      placeColumn(rc[0], rc[1], rc[2], i % 2 === 0 ? ruinStone : mossyStone, true);
+      const y0 = heightAt(rc[0], rc[1]);
+      const broken = rc[2] < 4.2;
+      const mat = i % 2 === 0 ? ruinStone : mossyStone;
+      mountSwappableProp(
+        broken ? 'ruin_column_broken' : 'ruin_column',
+        (fb) => buildCarvedColumnLocal(fb, rc[2] + 0.35, mat, broken),
+        rc[0], y0, rc[1], i * 0.7, rc[2] + 0.35
+      );
+      addCollider(rc[0], rc[1], 0.68, y0 + 0.35 + rc[2] + 0.32, true);
     }
     // Ruined stone lintel spanning intact column pair
     const hLintel = Math.min(heightAt(60, -15), heightAt(66, -18)) + 5.4;
@@ -521,8 +898,11 @@ const Regions = (() => {
     const hOb = heightAt(70, -10);
     addShadowMesh(new THREE.CylinderGeometry(3.4, 3.9, 0.9, 12), ruinStone, 70, hOb + 0.4, -10);
     addCollider(70, -10, 3.6, hOb + 0.85, true);
+    addShadowMesh(new THREE.CylinderGeometry(2.3, 2.7, 0.55, 8), mossyStone, 70, hOb + 1.05, -10);
     addShadowMesh(new THREE.CylinderGeometry(0.55, 1.35, 13.5, 6), ruinStone, 70, hOb + 7.4, -10);
     addCollider(70, -10, 1.35, hOb + 14.2, false);
+    addStarRuneCollar(group, 70, hOb + 2.15, -10, 1.38, runeGoldMat, 1.9, 0.5);
+    addStarRuneCollar(group, 70, hOb + 13.1, -10, 0.76, runeGoldMat, 2.2, 1.7);
     const obCrystal = addShadowMesh(gOrb, crystalGold, 70, hOb + 16.65, -10, 0, 0, 0, 0.78, 1.15, 0.78);
     const obRingA = addShadowMesh(gRing, goldMat, 70, hOb + 16.65, -10, 0.4, 0, 0, 2.15, 2.15, 1.15);
     const obRingB = addShadowMesh(gRing, goldMat, 70, hOb + 16.65, -10, -0.5, 0.9, 0, 1.55, 1.55, 1.05);
@@ -533,51 +913,131 @@ const Regions = (() => {
     animated.push({ mesh: obRingA, kind: 'ring', speed: 0.75 });
     animated.push({ mesh: obRingB, kind: 'ring', speed: -1.1 });
 
-    // 3. WHISPERING DEEP FOREST (62, -78): 18u Hollow Great-Tree Shrine
+    // 3. WHISPERING DEEP FOREST (62, -78): 20u Hollow Great-Tree Shrine with Lush Botanical Leaf-Card Canopy!
     const hTree = heightAt(62, -78);
-    // 4 massive buttress root pillars leaving a dramatic walk-in hollow shrine archway!
+    // Walk-in mossy stone hearth ring inside the hollow shrine
+    addShadowMesh(new THREE.CylinderGeometry(2.1, 2.35, 0.24, 12), mossyStone, 62, hTree + 0.08, -78);
+    addStarRuneCollar(group, 62, hTree + 0.22, -78, 1.85, runeGoldMat, 1.5, 0.3);
+
+    // 4 massive buttress root pillars + mossy flared root collars leaving a dramatic walk-in hollow archway!
     const buttressAngles = [0.65, 2.45, 3.85, 5.65];
     for (let i = 0; i < buttressAngles.length; i++) {
       const a = buttressAngles[i];
       const bx = 62 + Math.cos(a) * 2.55;
       const bz = -78 + Math.sin(a) * 2.55;
-      addShadowMesh(new THREE.CylinderGeometry(0.75, 1.35, 8.8, 8), treeBark, bx, hTree + 4.2, bz, 0, a, 0);
+      addShadowMesh(new THREE.CylinderGeometry(0.75, 1.38, 8.8, 8), treeBark, bx, hTree + 4.2, bz, 0, a, 0);
+      addShadowMesh(new THREE.CylinderGeometry(1.15, 1.65, 1.15, 8), mossyStone, bx, hTree + 0.55, bz, 0, a + 0.3, 0);
       addCollider(bx, bz, 1.15, hTree + 8.6, false);
     }
-    // Towering upper trunk + wide ancient limbs + huge layered emerald crown (18u tall skyline silhouette!)
-    addShadowMesh(new THREE.CylinderGeometry(1.7, 2.4, 7.6, 10), treeBark, 62, hTree + 10.6, -78);
+
+    // Towering upper trunk + gnarled primary & secondary spreading limbs
+    addShadowMesh(new THREE.CylinderGeometry(1.65, 2.45, 7.8, 10), treeBark, 62, hTree + 10.6, -78);
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 + 0.25;
-      const lx = 62 + Math.cos(a) * 4.4;
-      const lz = -78 + Math.sin(a) * 4.4;
-      addShadowMesh(new THREE.CylinderGeometry(0.38, 0.85, 6.2, 7), treeBark, lx * 0.5 + 31, hTree + 12.8, lz * 0.5 - 39, Math.sin(a) * 0.65, 0, -Math.cos(a) * 0.65);
-      addShadowMesh(new THREE.DodecahedronGeometry(3.8, 1), leafCanopy, lx, hTree + 14.6 + (i % 2) * 1.1, lz, 0, a, 0, 1.25, 0.78, 1.25);
+      const lx = 62 + Math.cos(a) * 4.6;
+      const lz = -78 + Math.sin(a) * 4.6;
+      addShadowMesh(
+        new THREE.CylinderGeometry(0.36, 0.88, 6.6, 7),
+        treeBark,
+        lx * 0.5 + 31, hTree + 12.8, lz * 0.5 - 39,
+        Math.sin(a) * 0.68, 0, -Math.cos(a) * 0.68
+      );
+      const a2 = a + 0.42;
+      const bx2 = 62 + Math.cos(a2) * 5.6;
+      const bz2 = -78 + Math.sin(a2) * 5.6;
+      addShadowMesh(
+        new THREE.CylinderGeometry(0.22, 0.48, 5.0, 6),
+        treeBark,
+        bx2 * 0.5 + 31, hTree + 14.9, bz2 * 0.5 - 39,
+        Math.sin(a2) * 0.52, 0, -Math.cos(a2) * 0.52
+      );
     }
-    addShadowMesh(new THREE.DodecahedronGeometry(4.6, 1), leafCanopy, 62, hTree + 16.8, -78, 0, 0.4, 0, 1.3, 0.82, 1.3);
-    // Warm emerald-gold spirit lantern suspended inside the Hollow Great-Tree archway
+
+    // Lush 4-Tier Botanical Leaf-Card Crown centered at (62, hTree, -78) (zero DodecahedronGeometry!)
+    const greatTreeCanopyRoot = new THREE.Group();
+    greatTreeCanopyRoot.position.set(62, hTree, -78);
+    greatTreeCanopyRoot.userData.isGreatTreeCanopy = true;
+    group.add(greatTreeCanopyRoot);
+
+    const greatTreeTiers = [
+      { count: 14, rad: 6.2, y: 12.6, cardW: 4.6, cardH: 4.2, pitch: 0.48, yJitter: 0.7, bend: 0.72, rMul: 0.86, gMul: 1.00, bMul: 0.76 },
+      { count: 14, rad: 5.1, y: 14.8, cardW: 4.8, cardH: 4.4, pitch: 0.14, yJitter: 0.75, bend: 0.76, rMul: 0.94, gMul: 1.05, bMul: 0.82 },
+      { count: 10, rad: 3.4, y: 17.0, cardW: 4.4, cardH: 4.0, pitch: -0.38, yJitter: 0.65, bend: 0.68, rMul: 1.00, gMul: 1.08, bMul: 0.84 },
+      { count: 7,  rad: 1.4, y: 19.0, cardW: 3.8, cardH: 3.5, pitch: -0.96, yJitter: 0.55, bend: 0.60, rMul: 1.06, gMul: 1.10, bMul: 0.86 },
+    ];
+    buildBotanicalCrown(greatTreeCanopyRoot, greatTreeTiers, greatTreeLeafMat, 15.6, 700, true);
+
+    // Central spirit lantern + 5 hanging glowing spirit wisps suspended under the boughs
     const treeLantern = addShadowMesh(gOrb, crystalGold, 62, hTree + 3.9, -78, 0, 0, 0, 0.65, 0.85, 0.65);
     const treeGlow = makeGlow(0x9fffa8, 3.6, 0.75);
     treeGlow.position.set(62, hTree + 3.9, -78);
     group.add(treeGlow);
     animated.push({ mesh: treeLantern, kind: 'spin', speed: 1.1, baseY: hTree + 3.9 });
 
-    // 4. TWILIGHT BASALT COAST: Weathered Lake Hylia Wooden Pier + Tidecaller's Arch & Pearl
-    // Weathered Wooden Pier extending cleanly from sandy cove shore (36, 60) straight out into deep turquoise water (26, 76)
+    for (let w = 0; w < 5; w++) {
+      const wa = (w / 5) * Math.PI * 2 + 0.45;
+      const wr = 3.6 + (w % 2) * 1.3;
+      const wx = 62 + Math.cos(wa) * wr;
+      const wz = -78 + Math.sin(wa) * wr;
+      const wy = hTree + 7.2 + (w % 3) * 0.9;
+      addShadowMesh(gCol, treeBark, wx, wy + 2.3, wz, 0, 0, 0, 0.06, 4.4, 0.06);
+      const wispMat = w % 2 === 0 ? crystalAqua : crystalGold;
+      const wisp = addShadowMesh(gOrb, wispMat, wx, wy, wz, 0, 0, 0, 0.24, 0.36, 0.24);
+      const wGlow = makeGlow(w % 2 === 0 ? 0x8effd8 : 0xffe885, 2.0, 0.72);
+      wGlow.position.set(wx, wy, wz);
+      group.add(wGlow);
+      animated.push({ mesh: wisp, kind: 'spin', speed: 1.3 + w * 0.15, baseY: wy });
+    }
+
+    // Ancient broken ruin waypoints framing the Whispering Deep Forest glade approach
+    const forestWaypoints = [[52.5, -72.5], [65.5, -66.5]];
+    for (let i = 0; i < forestWaypoints.length; i++) {
+      const fx = forestWaypoints[i][0];
+      const fz = forestWaypoints[i][1];
+      const fy = heightAt(fx, fz);
+      mountSwappableProp(
+        'ruin_column_broken',
+        (fb) => buildCarvedColumnLocal(fb, 2.8, mossyStone, true),
+        fx, fy, fz, i * 1.4, 2.8
+      );
+      addCollider(fx, fz, 0.68, fy + 2.8, true);
+    }
+
+    // 4. TWILIGHT BASALT COAST: Weathered Lake Hylia Wooden Pier (Bollards & Rope Trim) + Tidecaller's Arch & Pearl
     const pierAngle = Math.atan2(26 - 36, 76 - 60);
     const pierDeckY = 1.15;
+    const rxEdge = Math.cos(pierAngle) * 1.45;
+    const rzEdge = -Math.sin(pierAngle) * 1.45;
+    const fwdX = Math.sin(pierAngle);
+    const fwdZ = Math.cos(pierAngle);
     for (let i = 0; i < 6; i++) {
       const t = i / 5;
       const px = lerp(36, 26, t);
       const pz = lerp(60, 76, t);
       addShadowMesh(gBox, woodMat, px, pierDeckY - 0.14, pz, 0, pierAngle, 0, 3.4, 0.28, 3.6);
       addCollider(px, pz, 1.85, pierDeckY, true);
-      const rx = Math.cos(pierAngle) * 1.45;
-      const rz = -Math.sin(pierAngle) * 1.45;
-      addShadowMesh(gCol, treeBark, px + rx, pierDeckY - 2.4, pz + rz, 0, 0, 0, 0.34, 5.4, 0.34);
-      addShadowMesh(gCol, treeBark, px - rx, pierDeckY - 2.4, pz - rz, 0, 0, 0, 0.34, 5.4, 0.34);
+      // Submerged support pilings + carved mooring bollards above deck
+      addShadowMesh(gCol, treeBark, px + rxEdge, pierDeckY - 2.4, pz + rzEdge, 0, 0, 0, 0.34, 5.4, 0.34);
+      addShadowMesh(gCol, treeBark, px - rxEdge, pierDeckY - 2.4, pz - rzEdge, 0, 0, 0, 0.34, 5.4, 0.34);
+      addShadowMesh(gCol, woodMat, px + rxEdge, pierDeckY + 0.42, pz + rzEdge, 0, 0, 0, 0.30, 0.86, 0.30);
+      addShadowMesh(gCol, woodMat, px - rxEdge, pierDeckY + 0.42, pz - rzEdge, 0, 0, 0, 0.30, 0.86, 0.30);
+      addShadowMesh(gRing, ropeMat, px + rxEdge, pierDeckY + 0.72, pz + rzEdge, Math.PI * 0.5, 0, 0, 0.19, 0.19, 0.36);
+      addShadowMesh(gRing, ropeMat, px - rxEdge, pierDeckY + 0.72, pz - rzEdge, Math.PI * 0.5, 0, 0, 0.19, 0.19, 0.36);
+
+      if (i < 5) {
+        const tNext = (i + 1) / 5;
+        const nx = lerp(36, 26, tNext);
+        const nz = lerp(60, 76, tNext);
+        const mx = (px + nx) * 0.5;
+        const mz = (pz + nz) * 0.5;
+        const segLen = Math.hypot(nx - px, nz - pz);
+        addShadowMesh(gBox, ropeMat, mx + rxEdge, pierDeckY + 0.62, mz + rzEdge, 0, pierAngle, 0, 0.08, 0.08, segLen);
+        addShadowMesh(gBox, ropeMat, mx - rxEdge, pierDeckY + 0.62, mz - rzEdge, 0, pierAngle, 0, 0.08, 0.08, segLen);
+      }
     }
-    // Warm hanging lantern post at the open-water pier end
+    // Warm hanging lantern post + bracket at the open-water pier end
     addShadowMesh(gCol, treeBark, 27.3, pierDeckY + 1.5, 76.6, 0, 0, 0, 0.24, 3.1, 0.24);
+    addShadowMesh(gBox, woodMat, 27.3 + fwdX * 0.3, pierDeckY + 2.95, 76.6 + fwdZ * 0.3, 0, pierAngle, 0, 0.18, 0.16, 0.85);
     const pierGlow = makeGlow(0xffd478, 2.4, 0.85);
     pierGlow.position.set(27.3, pierDeckY + 3.05, 76.6);
     group.add(pierGlow);
@@ -586,15 +1046,26 @@ const Regions = (() => {
     const rx = RELIC_SITE.x;
     const rz = RELIC_SITE.z;
     const hRelic = heightAt(rx, rz);
-    addShadowMesh(new THREE.CylinderGeometry(4.2, 4.8, 0.8, 12), sunkenStone, rx, hRelic + 0.3, rz);
+    addShadowMesh(new THREE.CylinderGeometry(4.2, 4.8, 0.8, 12), coastalStone, rx, hRelic + 0.3, rz);
     addCollider(rx, rz, 4.4, hRelic + 0.7, true);
-    placeColumn(rx - 3.0, rz - 1.2, 5.4, sunkenStone, true);
-    placeColumn(rx + 3.0, rz + 1.2, 5.4, sunkenStone, true);
     const archYaw = Math.atan2(2.4, 6.0);
-    addShadowMesh(gArch, sunkenStone, rx, hRelic + 5.7, rz, 0, -archYaw, 0, 3.3, 3.1, 1.35);
+    const tideArchH = mountSwappableProp(
+      'ruin_arch',
+      (fb) => buildCarvedArchLocal(fb, 6.46, 8.2, 1.35, coastalStone),
+      rx, hRelic + 0.65, rz, -archYaw, 8.2
+    );
+    addStarRuneCollar(tideArchH, -3.15, 0.55, 0, 0.72, runeAquaMat, 2.0, 0.1);
+    addStarRuneCollar(tideArchH, 3.15, 0.55, 0, 0.72, runeAquaMat, 2.0, 1.3);
+    addCollider(rx - 3.0, rz - 1.2, 0.68, hRelic + 0.35 + 5.4 + 0.32, true);
+    addCollider(rx + 3.0, rz + 1.2, 0.68, hRelic + 0.35 + 5.4 + 0.32, true);
 
-    // Interactive Tidecaller's Pearl Pedestal (floating pearl + ring orbit cleanly ABOVE stone pedestal top at hRelic + 2.025!)
-    addShadowMesh(new THREE.CylinderGeometry(0.65, 0.85, 1.35, 10), sunkenStone, rx, hRelic + 1.35, rz);
+    // Interactive Tidecaller's Pearl Pedestal (floating pearl + ring orbit cleanly ABOVE stone pedestal top at hRelic + 2.03!)
+    const pearlPedH = mountSwappableProp(
+      'shrine_pedestal',
+      (fb) => buildCarvedPedestalLocal(fb, 1.38, coastalStone),
+      rx, hRelic + 0.65, rz, -archYaw, 1.38
+    );
+    addStarRuneCollar(pearlPedH, 0, 1.26, 0, 0.68, runeAquaMat, 2.2, 0.8);
     addCollider(rx, rz, 0.85, hRelic + 2.0, true);
     const pearlMesh = addShadowMesh(new THREE.SphereGeometry(0.46, 16, 12), crystalAqua, rx, hRelic + 2.88, rz);
     const pearlRing = addShadowMesh(gRing, goldMat, rx, hRelic + 2.88, rz, 0.65, 0.3, 0, 0.68, 0.68, 0.68);
@@ -622,7 +1093,7 @@ const Regions = (() => {
     animated.push({ mesh: pearlMesh, kind: 'spin', speed: 1.6, baseY: hRelic + 2.88 });
     animated.push({ mesh: pearlRing, kind: 'ring', speed: -1.4 });
 
-    // 5. CANYON OASIS (-86, -14): 16u Natural Sandstone Arch & Sandstone Sun-Gate
+    // 5. CANYON OASIS (-86, -14): Natural Sandstone Arch, Sun-Gate & Palm / Willow / Lilypad Spring Grove
     const hArch = heightAt(-66, -14);
     addShadowMesh(new THREE.CylinderGeometry(1.7, 2.6, 11.5, 8), sandstone, -66, hArch + 5.2, -23.5);
     addCollider(-66, -23.5, 2.3, hArch + 11.0, false);
@@ -630,29 +1101,160 @@ const Regions = (() => {
     addCollider(-66, -4.5, 2.3, hArch + 11.0, false);
     addShadowMesh(gArch, sandstone, -66, hArch + 10.6, -14, 0, Math.PI * 0.5, 0, 9.6, 6.2, 5.2);
 
-    // Sandstone Sun-Gate at (-86, -14)
+    // Sandstone Sun-Gate at (-88, -14) with carved plinths & glowing Star-Rune collars
     const hGate = heightAt(-86, -14);
+    addShadowMesh(new THREE.BoxGeometry(2.8, 0.7, 2.8), sandstone, -88, hGate + 0.35, -19.5);
     addShadowMesh(new THREE.BoxGeometry(2.2, 9.6, 2.2), sandstone, -88, hGate + 4.6, -19.5);
     addCollider(-88, -19.5, 1.45, hGate + 9.4, false);
+    addShadowMesh(new THREE.BoxGeometry(2.8, 0.7, 2.8), sandstone, -88, hGate + 0.35, -8.5);
     addShadowMesh(new THREE.BoxGeometry(2.2, 9.6, 2.2), sandstone, -88, hGate + 4.6, -8.5);
     addCollider(-88, -8.5, 1.45, hGate + 9.4, false);
     addShadowMesh(gBox, sandstone, -88, hGate + 9.8, -14, 0, 0, 0, 2.6, 1.5, 13.8);
+    addStarRuneCollar(group, -88, hGate + 1.85, -19.5, 1.55, runeGoldMat, 1.8, 0.2);
+    addStarRuneCollar(group, -88, hGate + 1.85, -8.5, 1.55, runeGoldMat, 1.8, 1.1);
     const sunDisc = addShadowMesh(gRing, crystalGold, -88, hGate + 12.9, -14, 0, Math.PI * 0.5, 0, 1.95, 1.95, 1.3);
     animated.push({ mesh: sunDisc, kind: 'ring', speed: 0.65 });
 
-    // 6. FROSTPEAK SHRINES (-68, -88): Carved Stone Stairs & 18u Summit Star-Spire
+    // Oasis Palm & Weeping Willow Spring Grove ringing (-76, -14)
+    const oasisPalms = [
+      [-78.5, -19.8, 8.6, 0.4],
+      [-69.6, -18.5, 8.1, 1.8],
+      [-80.8, -9.2,  8.8, 3.1],
+      [-70.0, -9.0,  7.9, 4.7],
+    ];
+    for (let i = 0; i < oasisPalms.length; i++) {
+      const op = oasisPalms[i];
+      const oy = heightAt(op[0], op[1]);
+      mountSwappableProp(
+        'palm_tree',
+        (fb) => {
+          const segs = 5;
+          const trunkH = op[2] * 0.84;
+          for (let s = 0; s < segs; s++) {
+            const t = (s + 0.5) / segs;
+            const lean = Math.sin(t * Math.PI * 0.65) * 0.55;
+            addShadowMesh(gCol, treeBark, lean, t * trunkH, 0, 0, 0, -0.14 * (1 - t * 0.4), 0.42 - t * 0.16, trunkH / segs + 0.12, 0.42 - t * 0.16, fb);
+          }
+          buildBotanicalCrown(
+            fb,
+            [{ count: 8, rad: 1.55, ox: 0.48, y: trunkH + 0.1, cardW: 1.4, cardH: 3.1, pitch: 1.15, yJitter: 0.32, bend: 0.55, rMul: 0.94, gMul: 1.04, bMul: 0.74 }],
+            oasisLeafMat,
+            trunkH,
+            1100 + i * 30
+          );
+        },
+        op[0], oy, op[1], op[3], op[2]
+      );
+      addCollider(op[0], op[1], 0.52, oy + op[2] * 0.7, false);
+    }
+
+    const oasisWillows = [
+      [-73.0, -19.8, 8.8, 0.9],
+      [-74.2, -8.2,  8.5, 2.5],
+      [-81.2, -18.6, 9.1, 4.1],
+    ];
+    for (let i = 0; i < oasisWillows.length; i++) {
+      const ow = oasisWillows[i];
+      const oy = heightAt(ow[0], ow[1]);
+      mountSwappableProp(
+        'willow_tree',
+        (fb) => {
+          const trunkH = ow[2] * 0.58;
+          addShadowMesh(gCol, treeBark, 0, trunkH * 0.5, 0, 0, 0, 0, 0.72, trunkH, 0.72, fb);
+          buildBotanicalCrown(
+            fb,
+            [
+              { count: 10, rad: 2.35, y: trunkH + 1.1, cardW: 2.6, cardH: 2.4, pitch: 0.34, yJitter: 0.4, bend: 0.5, rMul: 0.88, gMul: 1.02, bMul: 0.82 },
+              { count: 10, rad: 2.55, y: trunkH - 0.7, cardW: 1.4, cardH: 3.2, pitch: 1.42, yJitter: 0.4, bend: 0.35, rMul: 0.86, gMul: 1.00, bMul: 0.80 },
+            ],
+            oasisLeafMat,
+            trunkH + 0.5,
+            1400 + i * 40
+          );
+        },
+        ow[0], oy, ow[1], ow[3], ow[2]
+      );
+      addCollider(ow[0], ow[1], 0.62, oy + ow[2] * 0.55, false);
+    }
+
+    // Floating Lilypads & Lotus blossoms on the Canyon Oasis emerald spring (WATER_Y = 0)
+    const oasisLilies = [
+      [-76.5, -15.6, 0.20, 0.3],
+      [-74.0, -13.2, 0.24, 1.4],
+      [-78.8, -12.6, 0.18, 2.5],
+      [-73.2, -16.2, 0.22, 3.7],
+      [-77.4, -10.8, 0.19, 4.8],
+      [-79.2, -16.8, 0.21, 5.5],
+    ];
+    for (let i = 0; i < oasisLilies.length; i++) {
+      const ol = oasisLilies[i];
+      mountSwappableProp(
+        'lilypad',
+        (fb) => {
+          const diam = ol[2] * 5.2;
+          addShadowMesh(new THREE.CylinderGeometry(diam * 0.5, diam * 0.48, 0.05, 14), lilypadMat, 0, 0.025, 0, 0, 0, 0, 1, 1, 1, fb);
+          if (i % 2 === 0) {
+            addShadowMesh(gOrb, lotusMat, 0.1, 0.11, 0, 0, 0, 0, 0.18, 0.14, 0.18, fb);
+          }
+        },
+        ol[0], 0.03, ol[1], ol[3], ol[2],
+        { castShadow: false }
+      );
+    }
+
+    // Oasis shoreline reactive reed tufts
+    const oasisReeds = [
+      [-73.0, -19.0], [-80.5, -18.0], [-70.0, -17.0],
+      [-70.0, -11.0], [-82.0, -11.0], [-79.0, -9.0],
+    ];
+    const gReedBlade = new THREE.PlaneGeometry(0.28, 1.15, 1, 3);
+    gReedBlade.translate(0, 0.575, 0);
+    for (let i = 0; i < oasisReeds.length; i++) {
+      const rx0 = oasisReeds[i][0];
+      const rz0 = oasisReeds[i][1];
+      const ry0 = heightAt(rx0, rz0);
+      for (let b = 0; b < 3; b++) {
+        addShadowMesh(gReedBlade, oasisReedMat, rx0 + (b - 1) * 0.22, ry0, rz0 + (b % 2) * 0.18, 0.08 * b, i * 1.1 + b * 0.9, 0.05 * (b - 1));
+      }
+    }
+
+    // 6. FROSTPEAK SHRINES (-68, -88): Carved Alpine Stairs, Waypoint Pillars & 18u Summit Star-Spire
     for (let s = 0; s < 5; s++) {
       const sx = lerp(-60, -65, s / 4);
       const sz = lerp(-76, -83, s / 4);
       const sy = heightAt(sx, sz);
       addShadowMesh(gBox, frostStone, sx, sy + 0.15, sz, 0, 0.64, 0, 4.6, 0.5, 1.8);
+      addShadowMesh(gBox, frostStone, sx - 1.95, sy + 0.42, sz + 1.35, 0, 0.64, 0, 0.48, 0.36, 1.75);
+      addShadowMesh(gBox, frostStone, sx + 1.95, sy + 0.42, sz - 1.35, 0, 0.64, 0, 0.48, 0.36, 1.75);
       addCollider(sx, sz, 2.0, sy + 0.4, true);
     }
+
+    const frostMarkers = [
+      { key: 'ruin_column_broken', x: -54.5, z: -75.5, h: 3.1, ry: 0.4 },
+      { key: 'ruin_column_broken', x: -63.5, z: -70.5, h: 2.7, ry: 1.9 },
+      { key: 'ruin_column', x: -61.8, z: -84.2, h: 4.8, ry: 0.2 },
+      { key: 'ruin_column', x: -73.0, z: -82.0, h: 5.0, ry: 1.1 },
+    ];
+    for (let i = 0; i < frostMarkers.length; i++) {
+      const fm = frostMarkers[i];
+      const fy = heightAt(fm.x, fm.z);
+      const broken = fm.key === 'ruin_column_broken';
+      mountSwappableProp(
+        fm.key,
+        (fb) => buildCarvedColumnLocal(fb, fm.h, frostStone, broken),
+        fm.x, fy, fm.z, fm.ry, fm.h
+      );
+      addCollider(fm.x, fm.z, 0.68, fy + fm.h, true);
+    }
+
     const hPeak = heightAt(-68, -88);
     addShadowMesh(new THREE.CylinderGeometry(4.4, 5.2, 1.1, 12), frostStone, -68, hPeak + 0.4, -88);
     addCollider(-68, -88, 4.8, hPeak + 0.95, true);
+    addShadowMesh(new THREE.CylinderGeometry(2.6, 3.2, 0.65, 8), frostStone, -68, hPeak + 1.18, -88);
     addShadowMesh(new THREE.CylinderGeometry(0.45, 1.45, 16.5, 6), frostStone, -68, hPeak + 9.1, -88);
     addCollider(-68, -88, 1.5, hPeak + 17.4, false);
+    addStarRuneCollar(group, -68, hPeak + 2.3, -88, 1.48, runeIceMat, 1.7, 0.6);
+    addStarRuneCollar(group, -68, hPeak + 16.4, -88, 0.72, runeIceMat, 2.3, 1.9);
     // Floating crystal & orbiting ring elevated cleanly ABOVE stone spire pinnacle (hPeak + 17.35)!
     const spireCrown = addShadowMesh(gOrb, crystalIce, -68, hPeak + 20.1, -88, 0, 0, 0, 1.2, 1.75, 1.2);
     const spireRing = addShadowMesh(gRing, goldMat, -68, hPeak + 20.1, -88, 0.55, 0.2, 0, 2.35, 2.35, 1.15);
@@ -676,26 +1278,31 @@ const Regions = (() => {
       gKelpFrond.computeVertexNormals();
     }
 
-    // 7. THE SUNKEN UNDERWATER CITY (-14, 86): Coral Colonnade Arches, Bioluminescent Kelp & Sunken Star-Temple!
+    // 7. THE SUNKEN UNDERWATER CITY (-14, 86): Caustic-Lit Coral Colonnade Arches, Broken Ruins & Sunken Star-Temple!
     const coralMats = [coralRose, coralAmber, coralViolet];
-    // 5 monumental submerged coral-encrusted colonnade arches leading toward Sunken Star-Temple
     for (let a = 0; a < 5; a++) {
       const az = 62 + a * 6.0;
       const axL = -19.5;
       const axR = -8.5;
       const hL = heightAt(axL, az);
       const hR = heightAt(axR, az);
+      const archBaseY = Math.min(hL, hR);
       const colH = 6.2;
-      placeColumn(axL, az, colH, sunkenStone, true);
-      placeColumn(axR, az, colH, sunkenStone, true);
-      const archY = Math.min(hL, hR) + colH + 0.45;
-      addShadowMesh(gArch, sunkenStone, -14, archY, az, 0, 0, 0, 5.5, 4.2, 1.5);
 
-      // Multi-lobe branching reef coral clusters encrusting arch footings
+      mountSwappableProp(
+        'ruin_arch',
+        (fb) => buildCarvedArchLocal(fb, 11.0, 10.6, 1.5, sunkenStone),
+        -14, archBaseY, az, 0, 10.6,
+        { caustics: true }
+      );
+      addCollider(axL, az, 0.68, hL + 0.35 + colH + 0.32, true);
+      addCollider(axR, az, 0.68, hR + 0.35 + colH + 0.32, true);
+
+      // Multi-lobe caustic-lit branching reef coral clusters encrusting arch footings
       addShadowMesh(gCoralFan, coralMats[a % 3], axL + 0.8, hL + 0.55, az + 0.35, 0.25, a, 0.18, 0.95, 1.25, 0.52);
       addShadowMesh(gCoralFan, coralMats[(a + 2) % 3], axL + 0.35, hL + 0.38, az - 0.55, -0.2, a + 1.2, -0.22, 0.72, 0.88, 0.48);
       addShadowMesh(gCoralFan, coralMats[(a + 1) % 3], axR - 0.8, hR + 0.55, az - 0.35, -0.22, a + 1, 0.15, 0.92, 1.18, 0.52);
-      const lanY = archY + 4.1;
+      const lanY = archBaseY + 11.25;
       const lanOrb = addShadowMesh(gOrb, crystalAqua, -14, lanY, az, 0, 0, 0, 0.52, 0.52, 0.52);
       const lanGlow = makeGlow(0x5ef8ee, 3.6, 0.78);
       lanGlow.position.set(-14, lanY, az);
@@ -716,6 +1323,25 @@ const Regions = (() => {
       }
     }
 
+    // Flanking submerged broken ruins along the sunken avenue
+    const sunkenBroken = [
+      [-24, 72, 3.1, 0.4],
+      [-4,  76, 2.6, 1.7],
+      [-25, 84, 3.4, 2.8],
+      [-3,  88, 2.9, 4.0],
+    ];
+    for (let i = 0; i < sunkenBroken.length; i++) {
+      const sb = sunkenBroken[i];
+      const sy = heightAt(sb[0], sb[1]);
+      mountSwappableProp(
+        'ruin_column_broken',
+        (fb) => buildCarvedColumnLocal(fb, sb[2], sunkenStone, true),
+        sb[0], sy, sb[1], sb[3], sb[2],
+        { caustics: true }
+      );
+      addCollider(sb[0], sb[1], 0.68, sy + sb[2], true);
+    }
+
     // Grand 3-Tiered Sunken Star-Temple at (-14, 94)
     const tx = -14;
     const tz = 94;
@@ -727,12 +1353,26 @@ const Regions = (() => {
     addShadowMesh(new THREE.CylinderGeometry(5.6, 6.4, 1.0, 16), sunkenStone, tx, hT + 2.65, tz);
     addCollider(tx, tz, 5.8, hT + 3.15, true);
 
+    // Central caustic-lit temple altar pedestal crowned with pulsing Star-Rune collar
+    const templePedH = mountSwappableProp(
+      'shrine_pedestal',
+      (fb) => buildCarvedPedestalLocal(fb, 1.45, sunkenStone),
+      tx, hT + 3.15, tz, 0, 1.45,
+      { caustics: true }
+    );
+    addStarRuneCollar(templePedH, 0, 1.34, 0, 0.68, runeAquaMat, 2.1, 0.3);
+
     // 8 ringed temple columns + glowing Celestial Tide-Dome crown shining up through the turquoise bay!
     for (let i = 0; i < 8; i++) {
       const ang = (i / 8) * Math.PI * 2;
       const cx = tx + Math.cos(ang) * 7.2;
       const cz = tz + Math.sin(ang) * 7.2;
-      addShadowMesh(gCol, sunkenStone, cx, hT + 4.9, cz, 0, 0, 0, 0.95, 5.8, 0.95);
+      mountSwappableProp(
+        'ruin_column',
+        (fb) => buildCarvedColumnLocal(fb, 5.8, sunkenStone, false),
+        cx, hT + 2.0, cz, ang, 5.8,
+        { caustics: true }
+      );
       addCollider(cx, cz, 0.62, hT + 7.8, true);
     }
     const domeRingA = addShadowMesh(gRing, crystalAqua, tx, hT + 9.2, tz, 0.25, 0, 0, 5.2, 5.2, 1.6);
@@ -743,14 +1383,24 @@ const Regions = (() => {
     animated.push({ mesh: domeRingA, kind: 'ring', speed: 0.55 });
     animated.push({ mesh: domeRingB, kind: 'ring', speed: -0.85 });
 
-    // 8. SIX OFF-PATH SECRET STAR SHRINES (Discoverable Braziers!)
+    // 8. SIX OFF-PATH SECRET STAR SHRINES (Carved Brazier Pedestals + Pulsing Star-Rune Collars!)
     for (let i = 0; i < SECRETS.length; i++) {
       const sec = SECRETS[i];
       const sh = heightAt(sec.x, sec.z);
-      const pedMat = sec.underwater ? sunkenStone : ruinStone;
-      addShadowMesh(new THREE.CylinderGeometry(0.95, 1.2, 0.55, 8), pedMat, sec.x, sh + 0.22, sec.z);
-      addShadowMesh(new THREE.CylinderGeometry(0.45, 0.58, 1.15, 8), pedMat, sec.x, sh + 0.95, sec.z);
+      const pedMat = sec.underwater
+        ? sunkenStone
+        : (sec.regionId === 'canyonOasis' ? sandstone : (sec.regionId === 'frostpeak' ? frostStone : ruinStone));
+      const collarMat = sec.underwater ? runeAquaMat : (sec.regionId === 'frostpeak' ? runeIceMat : runeGoldMat);
+
+      const secHolder = mountSwappableProp(
+        'shrine_pedestal',
+        (fb) => buildCarvedPedestalLocal(fb, 1.52, pedMat),
+        sec.x, sh, sec.z, i * 0.85, 1.52,
+        { caustics: !!sec.underwater }
+      );
+      addStarRuneCollar(secHolder, 0, 1.40, 0, 0.66, collarMat, 2.2, i * 0.9);
       addCollider(sec.x, sec.z, 0.95, sh + 1.52, true);
+
       const gemMat = makeMat(null, sec.underwater ? 0x6ef6ee : 0xffd95a, 0.22, 0.28, {
         emissive: sec.underwater ? 0x165e64 : 0x5c3e06,
         emissiveIntensity: 0.55,
@@ -794,6 +1444,17 @@ const Regions = (() => {
         m.rotation.z += dt * item.speed * 0.45;
       } else if (item.kind === 'sway') {
         m.rotation.z = Math.sin(nowTime * item.speed + (item.phase || 0)) * 0.16;
+      } else if (item.kind === 'pulse') {
+        const wave = 0.5 + 0.5 * Math.sin(nowTime * (item.speed || 2.0) + (item.phase || i));
+        if (item.mat && typeof item.mat.emissiveIntensity === 'number') {
+          item.mat.emissiveIntensity =
+            (item.baseEmissive !== undefined ? item.baseEmissive : 0.55) +
+            wave * (item.pulseAmp !== undefined ? item.pulseAmp : 0.60);
+        }
+        if (typeof item.baseScale === 'number' && m.scale && typeof m.scale.set === 'function') {
+          const s = item.baseScale * (1 + (wave - 0.5) * 0.04);
+          m.scale.set(s, item.baseScaleY || s, s);
+        }
       }
     }
   }

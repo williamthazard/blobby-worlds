@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-function makeMockThree() {
+function makeMockThree(opts = {}) {
   class Vector3 {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
     set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
@@ -11,6 +11,7 @@ function makeMockThree() {
   class Object3D {
     constructor() {
       this.children = [];
+      this.parent = null;
       this.position = new Vector3();
       this.rotation = { x: 0, y: 0, z: 0, order: 'XYZ' };
       this.scale = new Vector3(1, 1, 1);
@@ -28,19 +29,52 @@ function makeMockThree() {
       }
       return this;
     }
+    traverse(fn) {
+      fn(this);
+      for (let i = 0; i < this.children.length; i++) {
+        this.children[i].traverse(fn);
+      }
+    }
   }
   class Color {
     constructor(hex = 0xffffff) { this.hex = hex; }
     convertSRGBToLinear() { return this; }
   }
   class Geo {
-    constructor(kind) { this.kind = kind; }
+    constructor(kind) { this.kind = kind; this.attributes = {}; }
     translate() { return this; }
     rotateX() { return this; }
     rotateY() { return this; }
     rotateZ() { return this; }
     scale() { return this; }
     computeVertexNormals() { return this; }
+  }
+  class BufferAttribute {
+    constructor(array, itemSize) {
+      this.array = array;
+      this.itemSize = itemSize;
+      this.count = array ? Math.floor(array.length / itemSize) : 0;
+    }
+    getX(i) { return this.array[i * this.itemSize]; }
+    getY(i) { return this.array[i * this.itemSize + 1]; }
+    getZ(i) { return this.array[i * this.itemSize + 2]; }
+    setXYZ(i, x, y, z) {
+      const o = i * this.itemSize;
+      this.array[o] = x;
+      this.array[o + 1] = y;
+      this.array[o + 2] = z;
+    }
+  }
+  class BufferGeometry extends Geo {
+    constructor() {
+      super('buffer');
+      this.index = null;
+    }
+    setAttribute(name, attr) { this.attributes[name] = attr; return this; }
+    setIndex(idx) {
+      this.index = idx instanceof BufferAttribute ? idx : new BufferAttribute(idx, 1);
+      return this;
+    }
   }
   class Mat {
     constructor(opts = {}) {
@@ -50,7 +84,7 @@ function makeMockThree() {
     }
   }
   class Mesh extends Object3D {
-    constructor(g, m) { super(); this.geometry = g; this.material = m; }
+    constructor(g, m) { super(); this.geometry = g; this.material = m; this.isMesh = true; }
   }
   class PointLight extends Object3D {
     constructor(c, i, d) { super(); this.color = c; this.intensity = i; this.distance = d; }
@@ -58,7 +92,7 @@ function makeMockThree() {
   class Sprite extends Object3D {
     constructor(m) { super(); this.material = m; }
   }
-  return {
+  const api = {
     Vector3,
     Object3D,
     Group: Object3D,
@@ -79,27 +113,75 @@ function makeMockThree() {
     TorusGeometry: class extends Geo { constructor() { super('torus'); } },
     OctahedronGeometry: class extends Geo { constructor() { super('octa'); } },
     DodecahedronGeometry: class extends Geo { constructor() { super('dodeca'); } },
-    PlaneGeometry: class extends Geo { constructor() { super('plane'); } },
+    PlaneGeometry: class extends Geo { constructor(w = 1, h = 1) { super('plane'); this.w = w; this.h = h; } },
   };
+  if (opts.withBufferGeo) {
+    api.BufferGeometry = BufferGeometry;
+    api.BufferAttribute = BufferAttribute;
+  }
+  return api;
 }
 
-function loadRegions(withThree = false) {
+function loadRegions(withThree = false, extraOpts = {}) {
   const code = fs.readFileSync(new URL('../regions.js', import.meta.url), 'utf8');
-  const THREE = withThree ? makeMockThree() : undefined;
+  const THREE = withThree ? makeMockThree({ withBufferGeo: !!extraOpts.withBufferGeo }) : undefined;
+  const causticPatches = [];
+  const treeWindPatches = [];
+  const foliagePatches = [];
+  const nodeSwaps = [];
+
+  const mockShaders = withThree
+    ? (extraOpts.fullShaders
+      ? {
+          createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()),
+          patchUnderwaterCaustics: (mat, opts) => { causticPatches.push({ mat, opts }); return mat; },
+          patchTreeWind: (mat, isFoliage) => { treeWindPatches.push({ mat, isFoliage }); return mat; },
+          patchFoliageReactive: (mat, opts) => { foliagePatches.push({ mat, opts }); return mat; },
+        }
+      : { createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()) })
+    : undefined;
+
+  const mockEnv = extraOpts.withEnv
+    ? {
+        registerNodeSwap(arg1, arg2, arg3, arg4) {
+          let key, holder, fallbackNode, opts;
+          if (typeof arg1 === 'string') {
+            key = arg1; holder = arg2; opts = arg3 || {}; fallbackNode = opts.fallback || null;
+          } else {
+            holder = arg1; key = arg2; fallbackNode = arg3 || null; opts = arg4 || {};
+          }
+          nodeSwaps.push({ key, holder, fallbackNode, opts });
+          return { key, holder, opts };
+        },
+      }
+    : undefined;
+
+  const mockTextures = extraOpts.textures || (withThree ? { sets: {} } : undefined);
+
   const sandbox = {
     Math,
     Number,
     Array,
     Object,
+    Float32Array,
+    Uint16Array,
     console,
     WATER_Y: 0,
     ...(THREE ? { THREE } : {}),
-    Shaders: withThree
-      ? { createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()) }
-      : undefined,
+    ...(mockShaders ? { Shaders: mockShaders } : {}),
+    ...(mockEnv ? { Env: mockEnv } : {}),
+    ...(mockTextures ? { Textures: mockTextures } : {}),
   };
   vm.runInNewContext(code + '\nthis.__Regions = Regions;', sandbox);
-  return { Regions: sandbox.__Regions, THREE };
+  return {
+    Regions: sandbox.__Regions,
+    THREE,
+    Textures: mockTextures,
+    causticPatches,
+    treeWindPatches,
+    foliagePatches,
+    nodeSwaps,
+  };
 }
 
 test('Regions defines 7 named anchored regions, 8 guided totems, Tidecaller Pearl, and 6 secret shrines', () => {
@@ -222,4 +304,140 @@ test('Regions.buildWorldLandmarks builds skyline landmarks, Sunken City, relic, 
   const spireRing = built.animated.find(a => a.kind === 'ring' && Math.hypot(a.mesh.position.x + 68, a.mesh.position.z + 88) < 1);
   const hPeak = hFn(-68, -88);
   assert.ok(spireRing && spireRing.mesh.position.y - spireRing.mesh.scale.x - 0.12 > hPeak + 17.35, 'Frostpeak spire ring must clear stone spire top');
+});
+
+test('Sub-Project 4 landmarks: botanical Hollow Great-Tree canopy, underwater caustics on Sunken City stone, oasis grove, and carved GLB shrine hot-swaps', () => {
+  const oakLeafCard = { isTexture: true, id: 'oakLeafCard' };
+  const {
+    Regions: R,
+    THREE,
+    Textures,
+    causticPatches,
+    treeWindPatches,
+    nodeSwaps,
+  } = loadRegions(true, {
+    withBufferGeo: true,
+    fullShaders: true,
+    withEnv: true,
+    textures: { sets: {}, oakLeafCard },
+  });
+
+  const scene = new THREE.Scene();
+  const hFn = (x, z) => R.getElevationMod(x, z, 2.0);
+  const nFn = (_x, _z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; };
+  const built = R.buildWorldLandmarks(scene, hFn, nFn, Textures);
+
+  // 1. Hollow Great-Tree must have ZERO DodecahedronGeometry foliage blobs and MUST use botanical oakLeafCard canopy with Shaders.patchTreeWind
+  const treeMeshes = [];
+  built.group.traverse((obj) => {
+    if (obj && obj.isMesh) {
+      treeMeshes.push(obj);
+    }
+  });
+  const dodecaLeafBlobs = treeMeshes.filter((m) => {
+    if (!m.geometry || m.geometry.kind !== 'dodeca') return false;
+    // Check meshes near Hollow Great-Tree (62, -78) or green leaf materials
+    const dx = (m.position ? m.position.x : 0) - 62;
+    const dz = (m.position ? m.position.z : 0) + 78;
+    const nearTree = Math.hypot(dx, dz) < 16;
+    const isLeafHex = m.material && m.material.color && m.material.color.hex === 0x4e8a42;
+    return nearTree || isLeafHex;
+  });
+  assert.equal(dodecaLeafBlobs.length, 0, 'Hollow Great-Tree canopy must contain ZERO DodecahedronGeometry foliage blobs');
+
+  const foliageWindCalls = treeWindPatches.filter((p) => p.isFoliage === true);
+  assert.ok(foliageWindCalls.length >= 1, 'Shaders.patchTreeWind(mat, true) must be called for botanical canopy foliage');
+  assert.ok(
+    foliageWindCalls.some((p) => p.mat && p.mat.map === oakLeafCard),
+    'Hollow Great-Tree canopy material must bind Textures.oakLeafCard'
+  );
+  const greatTreeCanopyNodes = treeMeshes.filter((m) => m.userData && m.userData.isGreatTreeCanopy);
+  assert.ok(greatTreeCanopyNodes.length >= 1, 'Hollow Great-Tree must tag botanical canopy node(s)');
+  assert.ok(
+    greatTreeCanopyNodes.some((m) => m.geometry && m.geometry.kind === 'buffer' && m.geometry.attributes.position && m.geometry.attributes.color),
+    'Hollow Great-Tree canopy should build merged vertex-colored curved leaf-card BufferGeometry when BufferGeometry is available'
+  );
+
+  // 2. Sunken City submerged stonework & coral materials must receive Shaders.patchUnderwaterCaustics
+  assert.ok(causticPatches.length >= 2, `Expected >=2 Shaders.patchUnderwaterCaustics calls (sunkenStone + corals), got ${causticPatches.length}`);
+  const causticMats = new Set(causticPatches.map((p) => p.mat));
+  const sunkenTempleCols = treeMeshes.filter((m) => m.userData && m.userData.sunkenStoneMesh);
+  assert.ok(sunkenTempleCols.length >= 4, 'Sunken City stonework meshes must exist');
+  for (const m of sunkenTempleCols) {
+    assert.ok(causticMats.has(m.material), 'All Sunken City stonework meshes must use caustic-patched materials');
+  }
+
+  // 3. Env.registerNodeSwap must register all expected ruin, shrine, and oasis prop keys
+  const registeredKeys = new Set(nodeSwaps.map((s) => s.key));
+  for (const expectedKey of [
+    'ruin_arch',
+    'ruin_column',
+    'ruin_column_broken',
+    'shrine_pedestal',
+    'palm_tree',
+    'willow_tree',
+    'lilypad',
+  ]) {
+    assert.ok(registeredKeys.has(expectedKey), `Env.registerNodeSwap must register '${expectedKey}'`);
+  }
+
+  // Sunken City swapped ruins/shrines must enable caustics: true
+  const sunkenSwaps = nodeSwaps.filter((s) => s.opts && s.opts.caustics === true);
+  assert.ok(sunkenSwaps.length >= 6, `Expected >=6 Sunken City node swaps with caustics: true, got ${sunkenSwaps.length}`);
+  assert.ok(sunkenSwaps.some((s) => s.key === 'ruin_arch'), 'Sunken City arches must register ruin_arch with caustics: true');
+  assert.ok(sunkenSwaps.some((s) => s.key === 'shrine_pedestal'), 'Sunken City pedestals/shrine must register shrine_pedestal with caustics: true');
+
+  // Every Secret Shrine must register a shrine_pedestal swap
+  const pedestalSwaps = nodeSwaps.filter((s) => s.key === 'shrine_pedestal');
+  assert.ok(pedestalSwaps.length >= 7, `Expected >=7 shrine_pedestal swaps (6 secrets + Tidecaller Pearl), got ${pedestalSwaps.length}`);
+
+  // Every swap holder must be attached in scene graph with a visible fallback child and preserve non-placeholder trim
+  for (const sw of nodeSwaps) {
+    assert.ok(sw.holder && sw.holder.parent, `Swap holder for '${sw.key}' must be attached to scene graph`);
+    assert.ok(sw.holder.children.length >= 1, `Swap holder for '${sw.key}' must contain procedural fallback geometry`);
+    assert.ok(sw.opts && (sw.opts.keepNonPlaceholders || sw.opts.fallback), `Swap for '${sw.key}' must preserve non-placeholder trim`);
+  }
+
+  // 4. Preserve ALL existing standable colliders & ring clearances
+  const pierCols = R.getNearbyColliders(36, 65, 8, []);
+  assert.ok(pierCols.some((c) => c.standable && c.topY > 0.5 && c.topY < 2.0));
+  const templeCols = R.getNearbyColliders(-14, 94, 14, []);
+  assert.ok(templeCols.some((c) => c.standable && c.topY < -5.0));
+  const sancCols = R.getNearbyColliders(0, 2.5, 1, []);
+  const hSanc = hFn(0, 0);
+  assert.ok(sancCols.some((c) => c.standable && c.pad && Math.abs(c.topY - (hSanc + 0.10)) < 0.01));
+
+  const obRings = built.animated.filter((a) => a.kind === 'ring' && Math.hypot(a.mesh.position.x - 70, a.mesh.position.z + 10) < 1);
+  assert.equal(obRings.length, 2, 'Sun-Dial Obelisk must preserve exactly 2 orbiting rings');
+  const hOb = hFn(70, -10);
+  for (const r of obRings) {
+    assert.ok(r.mesh.position.y - r.mesh.scale.x - 0.12 > hOb + 14.15);
+  }
+  const spireRing = built.animated.find((a) => a.kind === 'ring' && Math.hypot(a.mesh.position.x + 68, a.mesh.position.z + 88) < 1);
+  const hPeak = hFn(-68, -88);
+  assert.ok(spireRing && spireRing.mesh.position.y - spireRing.mesh.scale.x - 0.12 > hPeak + 17.35);
+
+  // 5. animateLandmarks updates crystals, rings, kelp sway, and pulsing rune collars cleanly
+  R.animateLandmarks(built, 0.016, 2.4);
+  const pulseEntries = built.animated.filter((a) => a.kind === 'pulse');
+  assert.ok(pulseEntries.length >= 6, 'Glowing Star-Rune collars on shrines/landmarks should gently pulse');
+
+  // 6. Lightweight mock THREE (without BufferGeometry) also builds multi-tier PlaneGeometry leaf cards with zero DodecahedronGeometry
+  const fallbackCtx = loadRegions(true, {
+    withBufferGeo: false,
+    fullShaders: true,
+    withEnv: true,
+    textures: { sets: {}, oakLeafCard },
+  });
+  const fbScene = new fallbackCtx.THREE.Scene();
+  const fbBuilt = fallbackCtx.Regions.buildWorldLandmarks(fbScene, hFn, nFn, fallbackCtx.Textures);
+  const fbMeshes = [];
+  fbBuilt.group.traverse((obj) => { if (obj && obj.isMesh) fbMeshes.push(obj); });
+  assert.equal(
+    fbMeshes.filter((m) => m.geometry && m.geometry.kind === 'dodeca').length,
+    0,
+    'PlaneGeometry canopy fallback must also emit zero DodecahedronGeometry meshes'
+  );
+  const fbTreeCards = fbMeshes.filter((m) => m.userData && m.userData.isGreatTreeCanopy && m.geometry && m.geometry.kind === 'plane');
+  assert.ok(fbTreeCards.length >= 20, `Expected multi-tier PlaneGeometry botanical cards on fallback canopy, got ${fbTreeCards.length}`);
 });
