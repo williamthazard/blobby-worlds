@@ -331,7 +331,13 @@ test('Textures.init builds all 14 seamless PBR sets and sprites with proper enco
   assert.ok(T.glowSprite.image._data[centerIdx + 3] >= 245);
   assert.ok(T.sparkleSprite.image._data[centerIdx + 3] >= 245);
 
-  // Broadleaf fern card + expressive Starkeeper face & radial iris textures
+  // Broadleaf fern card, 512px botanical tree cards, and expressive Starkeeper face & radial iris textures
+  assert.ok(T.oakLeafCard && T.oakLeafCard.image.width === 512 && T.oakLeafCard.image.height === 512, 'oakLeafCard must be 512x512');
+  assert.equal(T.oakLeafCard.encoding, THREE.sRGBEncoding);
+  assert.ok(T.pineBoughCard && T.pineBoughCard.image.width === 512 && T.pineBoughCard.image.height === 512, 'pineBoughCard must be 512x512');
+  assert.equal(T.pineBoughCard.encoding, THREE.sRGBEncoding);
+  assert.ok(T.pineSnowBoughCard && T.pineSnowBoughCard.image.width === 512 && T.pineSnowBoughCard.image.height === 512, 'pineSnowBoughCard must be 512x512');
+  assert.equal(T.pineSnowBoughCard.encoding, THREE.sRGBEncoding);
   assert.ok(T.fernCard && T.fernCard.image.width === 128, 'fernCard must be 128x128');
   assert.equal(T.fernCard.encoding, THREE.sRGBEncoding);
   assert.ok(T.starkeeperFace && T.starkeeperFace.image.width === 256, 'starkeeperFace must be 256x256');
@@ -369,4 +375,56 @@ test('Textures.updateEnvMap lazily creates PMREMGenerator, disposes old RT, and 
     T.updateEnvMap(mockRenderer, scene, 0x4ca2e8, 0x9bd2f2, { x: 0.5, y: 0.8, z: 0.2 }, 1.0);
   });
   assert.equal(scene.environment.id, 2);
+});
+
+test('Textures.init executes 2D canvas botanical card rendering cleanly at 512px for trees and 128px for ferns', () => {
+  const { THREE } = makeMockThreeAndDom();
+  let strokeCalls = 0;
+  let fillCalls = 0;
+  const mockDoc = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      const canvas = {
+        width: 0,
+        height: 0,
+        _data: null,
+        getContext() {
+          return {
+            strokeStyle: '',
+            fillStyle: '',
+            lineWidth: 1,
+            lineCap: 'butt',
+            createImageData(w, h) {
+              return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+            },
+            putImageData(img) { canvas._data = img.data; },
+            clearRect() {},
+            save() {},
+            restore() {},
+            translate() {},
+            rotate() {},
+            beginPath() {},
+            closePath() {},
+            moveTo() {},
+            lineTo() {},
+            quadraticCurveTo() {},
+            bezierCurveTo() {},
+            ellipse() {},
+            arc() {},
+            fill() { fillCalls++; },
+            stroke() { strokeCalls++; },
+          };
+        },
+      };
+      return canvas;
+    },
+  };
+  const T = loadTexturesWithBrowserMocks({ THREE, document: mockDoc });
+  T.init({ capabilities: { getMaxAnisotropy: () => 8 } });
+  assert.equal(T.oakLeafCard.image.width, 512);
+  assert.equal(T.pineBoughCard.image.width, 512);
+  assert.equal(T.pineSnowBoughCard.image.width, 512);
+  assert.equal(T.fernCard.image.width, 128);
+  assert.ok(fillCalls >= 48, `Expected >=48 leaf/pinna fills, got ${fillCalls}`);
+  assert.ok(strokeCalls >= 60, `Expected >=60 botanical vein/needle strokes, got ${strokeCalls}`);
 });

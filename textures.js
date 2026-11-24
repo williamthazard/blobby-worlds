@@ -415,25 +415,31 @@ const Textures = (() => {
         // Tall anisotropic fractured rock columns (NOT square cobblestone bricks!)
         const w = _worleyF1F2XY(u * 6 + warp * 0.32, v * 3, 6, 3, 433, _worleyScratch);
         const fissure = smoothstep(0.015, 0.16, w.f2 - w.f1);
+        const hairline = smoothstep(0.015, 0.085, Math.abs(bed - 0.5));
+        const microStrata = _periodicNoise2XY(u * 16 + warp * 0.5, v * 48, 16, 48, 461);
         const grit = _periodicNoise2(u * 32, v * 32, 32, 449);
 
-        const strata = clamp01(bed * 0.42 + ledge * 0.30 + w.id * 0.15 + grit * 0.13);
-        const h = clamp01(strata * (0.44 + 0.56 * fissure));
+        const strata = clamp01(bed * 0.36 + ledge * 0.28 + w.id * 0.13 + grit * 0.12 + microStrata * 0.11);
+        const h = clamp01(strata * (0.40 + 0.60 * fissure) * (0.84 + 0.16 * hairline));
         heights[idx] = h;
 
         // Weathered Lake Hylia warm umber-ochre limestone & cool slate strata
         const ochre = smoothstep(0.28, 0.86, bed * 0.68 + shelf * 0.32);
-        let r = lerp(68, 158, h) + ochre * 24;
-        let g = lerp(62, 140, h) + ochre * 13;
-        let b = lerp(56, 118, h) - ochre * 4;
+        let r = lerp(64, 162, h) + ochre * 24;
+        let g = lerp(59, 143, h) + ochre * 13;
+        let b = lerp(54, 120, h) - ochre * 4;
 
-        // Subtle dark sedimentary crevice shadows
-        const seam = 1 - fissure;
-        r = lerp(r, 44, seam * 0.60);
-        g = lerp(g, 41, seam * 0.60);
-        b = lerp(b, 44, seam * 0.60);
+        // Subtle dark sedimentary crevice shadows + faint damp lichen fleck in shaded cracks
+        const seam = 1 - fissure * (0.75 + 0.25 * hairline);
+        const lichen = seam * smoothstep(0.60, 0.90, _periodicNoise2(u * 8, v * 8, 8, 479));
+        r = lerp(r, 40, seam * 0.64);
+        g = lerp(g, 38, seam * 0.64);
+        b = lerp(b, 42, seam * 0.64);
+        r = lerp(r, 76, lichen * 0.35);
+        g = lerp(g, 94, lichen * 0.35);
+        b = lerp(b, 54, lichen * 0.35);
 
-        const rough = clamp01(lerp(0.91, 0.69, fissure * (0.45 + bed * 0.55)));
+        const rough = clamp01(lerp(0.91, 0.69, fissure * (0.40 + bed * 0.45 + microStrata * 0.15)));
         writePixel(albedoPx, roughPx, idx4, r, g, b, rough);
       }
     }
@@ -453,13 +459,15 @@ const Textures = (() => {
         const w = _worleyF1F2XY(u * 10 + warp * 0.8, v * 2, 10, 2, 541, _worleyScratch);
         const ridge = smoothstep(0.03, 0.28, w.f2 - w.f1);
         const fiber = _periodicNoise2XY(u * 32, v * 8, 32, 8, 557);
+        const fineGrain = _periodicNoise2XY(u * 64 + warp * 1.1, v * 16, 64, 16, 571);
+        const lenticel = smoothstep(0.74, 0.94, _periodicNoise2XY(u * 12, v * 24, 12, 24, 587)) * ridge;
 
-        const h = clamp01((channel * 0.52 + fiber * 0.18 + 0.30) * (0.22 + 0.78 * ridge));
+        const h = clamp01((channel * 0.44 + fiber * 0.16 + fineGrain * 0.14 + 0.26) * (0.18 + 0.82 * ridge) - lenticel * 0.10);
         heights[idx] = h;
 
-        const r = lerp(48, 152, h);
-        const g = lerp(34, 112, h);
-        const b = lerp(24, 78, h);
+        const r = lerp(42, 158, h) - lenticel * 16;
+        const g = lerp(30, 116, h) - lenticel * 12;
+        const b = lerp(21, 80, h) - lenticel * 8;
 
         const rough = clamp01(lerp(0.98, 0.82, h));
         writePixel(albedoPx, roughPx, idx4, r, g, b, rough);
@@ -579,8 +587,10 @@ const Textures = (() => {
         const cf = cuWrap - colId;
 
         const edgeDist = Math.min(Math.min(rf, 1 - rf) * (cols / rows), Math.min(cf, 1 - cf));
-        const mortar = smoothstep(0.025, 0.085, edgeDist);
+        const mortar = smoothstep(0.024, 0.082, edgeDist);
+        const bevel = smoothstep(0.03, 0.14, edgeDist);
         const blockTint = hash01(colId, rowId, 743);
+        const pit = _periodicNoise2(u * 64, v * 64, 64, 757);
 
         const rad = Math.sqrt(du * du + dv * dv);
         const ringOuter = 1 - smoothstep(0.004, 0.014, Math.abs(rad - 0.34));
@@ -590,23 +600,27 @@ const Textures = (() => {
         const starCross = Math.max(crossH, crossV) * smoothstep(0.42, 0.06, rad);
         const runeGroove = Math.max(Math.max(ringOuter, ringInner), starCross);
 
-        const stoneH = clamp01((0.68 + fbm * 0.22 + grain * 0.10) * (0.28 + 0.72 * mortar) - runeGroove * 0.32);
+        const stoneH = clamp01((0.60 + fbm * 0.22 + grain * 0.10 + pit * 0.08) * (0.24 + 0.62 * mortar + 0.14 * bevel) - runeGroove * 0.34);
         heights[idx] = stoneH;
 
-        const base = lerp(142, 198, blockTint * 0.35 + fbm * 0.45 + grain * 0.20);
+        const base = lerp(136, 204, blockTint * 0.34 + fbm * 0.42 + grain * 0.14 + pit * 0.10);
         let r = base * 0.96;
         let g = base * 0.99;
         let b = base * 1.03;
 
-        r = lerp(84, r, mortar);
-        g = lerp(90, g, mortar);
-        b = lerp(96, b, mortar);
+        const seamMoss = (1 - mortar) * smoothstep(0.46, 0.84, fbm);
+        r = lerp(78, r, mortar);
+        g = lerp(86, g, mortar);
+        b = lerp(92, b, mortar);
+        r = lerp(r, 64, seamMoss * 0.45);
+        g = lerp(g, 92, seamMoss * 0.45);
+        b = lerp(b, 56, seamMoss * 0.45);
 
-        r = lerp(r, 78, runeGroove * 0.78);
-        g = lerp(g, 92, runeGroove * 0.78);
-        b = lerp(b, 118, runeGroove * 0.78);
+        r = lerp(r, 74, runeGroove * 0.80);
+        g = lerp(g, 89, runeGroove * 0.80);
+        b = lerp(b, 116, runeGroove * 0.80);
 
-        const rough = clamp01(lerp(0.92, 0.72, mortar * (1 - runeGroove * 0.85) * (0.4 + 0.6 * fbm)));
+        const rough = clamp01(lerp(0.92, 0.72, mortar * (1 - runeGroove * 0.85) * (0.35 + 0.50 * fbm + 0.15 * pit)));
         writePixel(albedoPx, roughPx, idx4, r, g, b, rough);
       }
     }
@@ -822,13 +836,15 @@ const Textures = (() => {
         const u = x * inv;
         const idx = y * size + x;
 
-        const w1 = Math.sin((u * 4 + v * 2) * TAU) * 0.20;
-        const w2 = Math.cos((u * 3 - v * 5) * TAU) * 0.16;
-        const w3 = Math.sin((u * 7 + v * 6) * TAU) * 0.10;
+        const w1 = Math.sin((u * 4 + v * 2) * TAU) * 0.18;
+        const w2 = Math.cos((u * 3 - v * 5) * TAU) * 0.14;
+        const w3 = Math.sin((u * 7 + v * 6) * TAU) * 0.09;
         const fbmA = _periodicFbm(u * 8, v * 8, 8, 3, 1103) - 0.5;
         const fbmB = _periodicNoise2(u * 16, v * 16, 16, 1117) - 0.5;
+        const cap = Math.sin((u * 13 - v * 9) * TAU + fbmA * 2.4) * 0.06;
+        const fineRip = _periodicNoise2(u * 32, v * 32, 32, 1131) - 0.5;
 
-        heights[idx] = clamp01(0.5 + w1 + w2 + w3 + fbmA * 0.45 + fbmB * 0.18);
+        heights[idx] = clamp01(0.5 + w1 + w2 + w3 + cap + fbmA * 0.38 + fbmB * 0.18 + fineRip * 0.14);
       }
     }
   }
@@ -903,6 +919,8 @@ const Textures = (() => {
     return makeCanvasTexture(size, px, THREE.sRGBEncoding, maxAniso, false);
   }
 
+  let _cardFallbackPx = null;
+
   function buildFoliageCard(kind, size, maxAniso) {
     const c = document.createElement('canvas');
     c.width = size;
@@ -912,84 +930,116 @@ const Textures = (() => {
       ctx.clearRect(0, 0, size, size);
       const cx = size * 0.5;
       const cy = size * 0.52;
+      const scale = size / 256;
 
       if (kind === 'oak') {
-        // Woody branching twigs radiating from center
-        ctx.strokeStyle = '#4e3522';
+        // Woody branching twigs radiating from center with warm sunlit bark highlight
         ctx.lineCap = 'round';
         const twigs = [
-          [0, 0.36, 0, -0.34, 4.5],
-          [0, 0.14, -0.30, -0.14, 3.2],
-          [0, 0.14, 0.30, -0.14, 3.2],
-          [0, -0.04, -0.26, -0.30, 2.6],
-          [0, -0.04, 0.26, -0.30, 2.6],
-          [0, 0.24, -0.26, 0.14, 2.6],
-          [0, 0.24, 0.26, 0.14, 2.6],
+          [0, 0.38, 0, -0.36, 4.8],
+          [0, 0.16, -0.32, -0.14, 3.4],
+          [0, 0.16, 0.32, -0.14, 3.4],
+          [0, -0.04, -0.28, -0.32, 2.8],
+          [0, -0.04, 0.28, -0.32, 2.8],
+          [0, 0.26, -0.28, 0.14, 2.6],
+          [0, 0.26, 0.28, 0.14, 2.6],
+          [-0.14, -0.18, -0.36, -0.26, 1.9],
+          [0.14, -0.18, 0.36, -0.26, 1.9],
         ];
         for (let i = 0; i < twigs.length; i++) {
           const t = twigs[i];
-          ctx.lineWidth = t[4] * (size / 256);
+          ctx.strokeStyle = '#4a301e';
+          ctx.lineWidth = t[4] * scale;
           ctx.beginPath();
           ctx.moveTo(cx + t[0] * size, cy + t[1] * size);
           ctx.lineTo(cx + t[2] * size, cy + t[3] * size);
           ctx.stroke();
+
+          ctx.strokeStyle = 'rgba(136, 98, 66, 0.45)';
+          ctx.lineWidth = Math.max(1, t[4] * 0.35 * scale);
+          ctx.beginPath();
+          ctx.moveTo(cx + t[0] * size - 1, cy + t[1] * size - 1);
+          ctx.lineTo(cx + t[2] * size - 1, cy + t[3] * size - 1);
+          ctx.stroke();
         }
 
-        // 30 distinct individual pointed meadow/oak leaves with midrib veins & transparent sky gaps!
-        const leafCount = 30;
+        // 48 layered serrated/lobed botanical oak leaves with lateral veins & airy sky gaps
+        const leafCount = 48;
+        const deepFills = ['#235321', '#2c6528', '#35742f'];
+        const midFills = ['#3e8436', '#4c963f', '#5aa746'];
+        const topFills = ['#68b24c', '#7bc455', '#8ed460'];
         for (let i = 0; i < leafCount; i++) {
-          const ring = i < 12 ? 0 : i < 24 ? 1 : 2;
-          const idxInRing = ring === 0 ? i : ring === 1 ? i - 12 : i - 24;
-          const totalInRing = ring === 0 ? 12 : ring === 1 ? 12 : 6;
-          const baseAng = (idxInRing / totalInRing) * TAU + ring * 0.48 + ((i * 37) % 11 - 5) * 0.035;
-          const dist = (ring === 0 ? 0.32 : ring === 1 ? 0.19 : 0.08) * size * (0.88 + ((i * 23) % 10) * 0.024);
+          const ring = i < 18 ? 0 : i < 36 ? 1 : 2;
+          const idxInRing = ring === 0 ? i : ring === 1 ? i - 18 : i - 36;
+          const totalInRing = ring === 0 ? 18 : ring === 1 ? 18 : 12;
+          const baseAng = (idxInRing / totalInRing) * TAU + ring * 0.44 + ((i * 37) % 11 - 5) * 0.032;
+          const dist = (ring === 0 ? 0.33 : ring === 1 ? 0.21 : 0.095) * size * (0.88 + ((i * 23) % 10) * 0.022);
           const lx = cx + Math.cos(baseAng) * dist;
           const ly = cy + Math.sin(baseAng) * dist * 0.94;
-          const len = (ring === 0 ? 0.155 : ring === 1 ? 0.145 : 0.13) * size * (0.9 + ((i * 17) % 7) * 0.03);
-          const wid = len * 0.56;
+          const len = (ring === 0 ? 0.145 : ring === 1 ? 0.135 : 0.12) * size * (0.88 + ((i * 17) % 7) * 0.03);
+          const wid = len * 0.58;
 
           ctx.save();
           ctx.translate(lx, ly);
           ctx.rotate(baseAng + Math.PI * 0.5);
 
-          // Rich botanical shading: darker inner leaves -> emerald mid -> bright sunlit outer leaves
-          const shade = ring === 2 ? 0 : ring === 1 ? 1 : 2;
-          const fills = ['#356f32', '#4c9442', '#6db64e', '#86cc5c'];
-          ctx.fillStyle = fills[Math.min(3, shade + (i % 2))];
+          // Inner canopy depth shading -> sunlit outer golden-emerald crowns
+          const palette = ring === 2 ? deepFills : ring === 1 ? midFills : topFills;
+          ctx.fillStyle = palette[i % 3];
           ctx.beginPath();
-          ctx.moveTo(0, len * 0.42);
-          ctx.quadraticCurveTo(-wid, 0, 0, -len * 0.58);
-          ctx.quadraticCurveTo(wid, 0, 0, len * 0.42);
+          ctx.moveTo(0, len * 0.44);
+          ctx.quadraticCurveTo(-wid * 0.85, len * 0.20, -wid * 0.68, len * 0.06);
+          ctx.quadraticCurveTo(-wid * 1.12, -len * 0.12, -wid * 0.62, -len * 0.24);
+          ctx.quadraticCurveTo(-wid * 0.72, -len * 0.42, 0, -len * 0.60);
+          ctx.quadraticCurveTo(wid * 0.72, -len * 0.42, wid * 0.62, -len * 0.24);
+          ctx.quadraticCurveTo(wid * 1.12, -len * 0.12, wid * 0.68, len * 0.06);
+          ctx.quadraticCurveTo(wid * 0.85, len * 0.20, 0, len * 0.44);
           ctx.closePath();
           ctx.fill();
 
-          // Crisp sunlit midrib vein
-          ctx.strokeStyle = 'rgba(220, 245, 165, 0.42)';
-          ctx.lineWidth = Math.max(1, size * 0.006);
+          // Subtle leaf edge highlight on outer sunlit ring
+          if (ring === 0) {
+            ctx.strokeStyle = 'rgba(184, 232, 128, 0.35)';
+            ctx.lineWidth = Math.max(1, size * 0.0025);
+            ctx.stroke();
+          }
+
+          // Crisp central midrib vein + 3 pairs of delicate lateral veins
+          ctx.strokeStyle = ring === 2 ? 'rgba(145, 198, 108, 0.34)' : 'rgba(222, 246, 168, 0.48)';
+          ctx.lineWidth = Math.max(1, size * 0.0038);
           ctx.beginPath();
-          ctx.moveTo(0, len * 0.34);
-          ctx.lineTo(0, -len * 0.44);
+          ctx.moveTo(0, len * 0.36);
+          ctx.lineTo(0, -len * 0.48);
+          for (let vIdx = 0; vIdx < 3; vIdx++) {
+            const vy = lerp(len * 0.18, -len * 0.24, vIdx / 2);
+            const vw = wid * (0.62 - vIdx * 0.12);
+            ctx.moveTo(0, vy);
+            ctx.lineTo(-vw, vy - len * 0.10);
+            ctx.moveTo(0, vy);
+            ctx.lineTo(vw, vy - len * 0.10);
+          }
           ctx.stroke();
           ctx.restore();
         }
       } else {
-        // Feathery evergreen pine-bough needle spray (with optional snow-frosted upper tips)
+        // Feathery evergreen pine-bough needle spray (with optional snow-dusted clusters)
         const snow = kind === 'pineSnow';
-        ctx.strokeStyle = '#4c3422';
-        ctx.lineWidth = 4.5 * (size / 256);
+        ctx.strokeStyle = '#48301e';
+        ctx.lineWidth = 4.6 * scale;
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(cx, size * 0.90);
-        ctx.lineTo(cx, size * 0.16);
+        ctx.lineTo(cx, size * 0.14);
         ctx.stroke();
 
-        // 5 pairs of angled sub-branchlets fanning outward
+        // 6 pairs of angled sub-branchlets + leader fanning outward
         const branches = [
-          [0, 0.80, -0.34, 0.56], [0, 0.80, 0.34, 0.56],
-          [0, 0.64, -0.38, 0.36], [0, 0.64, 0.38, 0.36],
-          [0, 0.48, -0.32, 0.22], [0, 0.48, 0.32, 0.22],
-          [0, 0.34, -0.22, 0.12], [0, 0.34, 0.22, 0.12],
-          [0, 0.22, 0, 0.06],
+          [0, 0.84, -0.34, 0.62], [0, 0.84, 0.34, 0.62],
+          [0, 0.70, -0.40, 0.44], [0, 0.70, 0.40, 0.44],
+          [0, 0.56, -0.36, 0.28], [0, 0.56, 0.36, 0.28],
+          [0, 0.42, -0.28, 0.16], [0, 0.42, 0.28, 0.16],
+          [0, 0.30, -0.18, 0.09], [0, 0.30, 0.18, 0.09],
+          [0, 0.20, 0, 0.05],
         ];
         for (let b = 0; b < branches.length; b++) {
           const br = branches[b];
@@ -998,32 +1048,49 @@ const Textures = (() => {
           const x1 = cx + br[2] * size;
           const y1 = br[3] * size;
           const ang = Math.atan2(y1 - y0, x1 - x0);
-          ctx.strokeStyle = '#4a3220';
-          ctx.lineWidth = 2.6 * (size / 256);
+          ctx.strokeStyle = '#462e1c';
+          ctx.lineWidth = 2.4 * scale;
           ctx.beginPath();
           ctx.moveTo(x0, y0);
           ctx.lineTo(x1, y1);
           ctx.stroke();
 
-          // Radiating needle tufts along each branchlet with crisp transparent gaps between needles
-          const steps = 8;
+          // Dense multi-layered radiating needle sprays along each branchlet
+          const steps = 11;
           for (let s = 1; s <= steps; s++) {
             const t = s / steps;
             const bx = lerp(x0, x1, t);
             const by = lerp(y0, y1, t);
-            const nLen = (0.095 + (1 - t) * 0.04) * size;
-            for (let side = -1; side <= 1; side++) {
-              const na = ang + side * (0.58 + (s % 2) * 0.12);
+            const nLen = (0.088 + (1 - t) * 0.042) * size;
+            for (let side = -2; side <= 2; side++) {
+              const na = ang + side * (0.40 + (s % 2) * 0.07);
               const nx = bx + Math.cos(na) * nLen;
               const ny = by + Math.sin(na) * nLen;
-              ctx.strokeStyle = snow && (t > 0.42 || b >= 5)
-                ? (s % 2 === 0 ? '#eef6fb' : '#cde0ec')
-                : (s % 2 === 0 ? '#2b6a44' : '#3f8a54');
-              ctx.lineWidth = (3.4 + (1 - t) * 1.4) * (size / 256);
+              const isTipSnow = snow && (t > 0.38 || b >= 6) && (side >= -1);
+              if (isTipSnow) {
+                ctx.strokeStyle = (s + side) % 2 === 0 ? '#f0f7fc' : '#cfe2ee';
+              } else {
+                const shadeIdx = (s + Math.abs(side)) % 3;
+                ctx.strokeStyle = shadeIdx === 0 ? '#1e4e32' : (shadeIdx === 1 ? '#2d6e46' : '#418f54');
+              }
+              ctx.lineWidth = (2.6 + (1 - t) * 1.1) * scale;
               ctx.beginPath();
               ctx.moveTo(bx, by);
               ctx.lineTo(nx, ny);
               ctx.stroke();
+            }
+          }
+
+          // Organic powdery snow clumps perched along upper pine boughs
+          if (snow && b >= 2) {
+            ctx.fillStyle = 'rgba(238, 246, 252, 0.85)';
+            for (let d = 1; d <= 3; d++) {
+              const t = d * 0.28;
+              const sx = lerp(x0, x1, t);
+              const sy = lerp(y0, y1, t) - size * 0.012;
+              ctx.beginPath();
+              ctx.arc(sx, sy, size * (0.022 - d * 0.003), 0, TAU);
+              ctx.fill();
             }
           }
         }
@@ -1038,23 +1105,33 @@ const Textures = (() => {
       return tex;
     }
 
-    // Headless Node mock fallback (uses putImageData)
-    const px = new Uint8Array(size * size * 4);
+    // Headless Node mock fallback (reuses buffer for fast zero-GC boot)
+    const needLen = size * size * 4;
+    if (!_cardFallbackPx || _cardFallbackPx.length < needLen) {
+      _cardFallbackPx = new Uint8Array(needLen);
+    }
+    const px = _cardFallbackPx;
     const half = size * 0.5;
+    const invHalf = 1 / half;
+    const rLimitSq = 0.85 * 0.85;
+    const isSnow = kind === 'pineSnow';
+    const baseR = isSnow ? 220 : (kind === 'pine' ? 54 : 88);
+    const baseG = isSnow ? 236 : (kind === 'pine' ? 128 : 168);
+    const baseB = isSnow ? 245 : (kind === 'pine' ? 76 : 92);
     for (let y = 0; y < size; y++) {
-      const dy = (y + 0.5 - half) / half;
+      const dy = (y + 0.5 - half) * invHalf;
+      const dy2 = dy * dy;
+      const rowOff = y * size;
       for (let x = 0; x < size; x++) {
-        const dx = (x + 0.5 - half) / half;
-        const r = Math.hypot(dx, dy);
-        const idx4 = (y * size + x) * 4;
-        const a = r < 0.85 ? 255 : 0;
-        px[idx4] = kind === 'pineSnow' ? 220 : 88;
-        px[idx4 + 1] = kind === 'pineSnow' ? 236 : 168;
-        px[idx4 + 2] = kind === 'pineSnow' ? 245 : 92;
-        px[idx4 + 3] = a;
+        const dx = (x + 0.5 - half) * invHalf;
+        const idx4 = (rowOff + x) * 4;
+        px[idx4] = baseR;
+        px[idx4 + 1] = baseG;
+        px[idx4 + 2] = baseB;
+        px[idx4 + 3] = (dx * dx + dy2) < rLimitSq ? 255 : 0;
       }
     }
-    return makeCanvasTexture(size, px, THREE.sRGBEncoding, maxAniso, false);
+    return makeCanvasTexture(size, px.subarray(0, needLen), THREE.sRGBEncoding, maxAniso, false);
   }
 
   function buildFernCard(size, maxAniso) {
@@ -1088,8 +1165,8 @@ const Textures = (() => {
         ctx.quadraticCurveTo(midX, midY, tipX, tipY);
         ctx.stroke();
 
-        // Pairs of scalloped pinnae leaflets along each arching frond
-        const pairs = 8;
+        // Pairs of scalloped pinnae leaflets along each arching frond + sunlit vein highlights
+        const pairs = 9;
         for (let p = 1; p <= pairs; p++) {
           const t = p / (pairs + 0.5);
           const it = 1 - t;
@@ -1098,17 +1175,23 @@ const Textures = (() => {
           const tx = 2 * it * (midX - cx) + 2 * t * (tipX - midX);
           const ty = 2 * it * (midY - baseY) + 2 * t * (tipY - midY);
           const ang = Math.atan2(ty, tx);
-          const leafLen = size * (0.14 - t * 0.075) * (0.88 + (f % 2) * 0.16);
+          const leafLen = size * (0.145 - t * 0.078) * (0.88 + (f % 2) * 0.16);
           const leafWid = leafLen * 0.44;
           for (let side = -1; side <= 1; side += 2) {
             ctx.save();
             ctx.translate(bx, by);
             ctx.rotate(ang + side * 1.12);
-            const gShade = t > 0.55 ? '#6ea645' : (f % 2 === 0 ? '#4d8236' : '#3d6e2d');
+            const gShade = t > 0.58 ? '#78b24c' : (f % 2 === 0 ? '#4d8236' : '#3d6e2d');
             ctx.fillStyle = gShade;
             ctx.beginPath();
             ctx.ellipse(leafLen * 0.52, 0, leafLen * 0.54, leafWid * 0.52, 0, 0, TAU);
             ctx.fill();
+            ctx.strokeStyle = 'rgba(218, 245, 165, 0.35)';
+            ctx.lineWidth = Math.max(0.8, size * 0.008);
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(leafLen * 0.85, 0);
+            ctx.stroke();
             ctx.restore();
           }
         }
@@ -1533,10 +1616,10 @@ const Textures = (() => {
         ['forest', genForest, 3.0],
         ['sand', genSand, 2.4],
         ['snow', genSnow, 1.8],
-        ['rock', genRock, 4.2],
-        ['bark', genBark, 4.0],
+        ['rock', genRock, 4.5],
+        ['bark', genBark, 4.4],
         ['leaves', genLeaves, 3.2],
-        ['stone', genStone, 3.6],
+        ['stone', genStone, 4.0],
         ['cloth', genCloth, 2.0],
         ['leather', genLeather, 2.6],
         ['fur', genFur, 2.2],
@@ -1551,16 +1634,16 @@ const Textures = (() => {
       }
 
       genWaterNormal(SIZE, heights);
-      _heightToNormalPixels(heights, SIZE, 2.5, normalPx);
+      _heightToNormalPixels(heights, SIZE, 2.8, normalPx);
       this.sets.waterNormal = {
         normalMap: makeCanvasTexture(SIZE, normalPx, THREE.LinearEncoding, maxAniso, true),
       };
 
       this.glowSprite = buildGlowSprite(SPRITE_SIZE, maxAniso);
       this.sparkleSprite = buildSparkleSprite(SPRITE_SIZE, maxAniso);
-      this.oakLeafCard = buildFoliageCard('oak', 256, maxAniso);
-      this.pineBoughCard = buildFoliageCard('pine', 256, maxAniso);
-      this.pineSnowBoughCard = buildFoliageCard('pineSnow', 256, maxAniso);
+      this.oakLeafCard = buildFoliageCard('oak', 512, maxAniso);
+      this.pineBoughCard = buildFoliageCard('pine', 512, maxAniso);
+      this.pineSnowBoughCard = buildFoliageCard('pineSnow', 512, maxAniso);
       this.fernCard = buildFernCard(128, maxAniso);
       this.starkeeperFace = buildStarkeeperFaceTex(256, maxAniso);
       this.starkeeperIris = buildStarkeeperIrisTex(128, maxAniso);
