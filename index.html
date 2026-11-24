@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blobby Worlds: The Starkeeper</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,2 20,12 30,16 20,20 16,30 12,20 2,16 12,12' fill='%23ffd93b'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root {
+    --target-size: 28px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+  }
+  @media (pointer: coarse) {
+    :root { --target-size: 44px; }
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  body {
+    font-family: "Avenir Next", Avenir, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: #141c34;
+    color: #ede8da;
+    overflow-wrap: break-word;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+  h1, h2, h3 { text-wrap: balance; }
+  p { text-wrap: pretty; }
+
+  /* Cinematic Z-Target Letterbox Bars */
+  #letterboxTop, #letterboxBot {
+    position: fixed;
+    left: 0;
+    right: 0;
+    height: 26px;
+    z-index: 4;
+    pointer-events: none;
+    background: linear-gradient(to bottom, rgba(7, 10, 22, 0.94), rgba(13, 18, 36, 0.86));
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  #letterboxTop {
+    top: 0;
+    border-bottom: 1px solid rgba(255, 217, 59, 0.16);
+    transform: translate3d(0, -100%, 0);
+  }
+  #letterboxBot {
+    bottom: 0;
+    background: linear-gradient(to top, rgba(7, 10, 22, 0.94), rgba(13, 18, 36, 0.86));
+    border-top: 1px solid rgba(255, 217, 59, 0.16);
+    transform: translate3d(0, 100%, 0);
+  }
+  body.z-active #letterboxTop,
+  body.z-active #letterboxBot {
+    transform: translate3d(0, 0, 0);
+  }
+
+  /* Animated Z-Target Lock-On Reticle */
+  #lockReticle {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    z-index: 6;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform-origin: 0 0;
+    transition: opacity 0.12s ease-out;
+    will-change: transform, opacity;
+  }
+  .reticle-wrap {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 46px;
+    height: 46px;
+    transform: translate(-50%, -50%);
+  }
+  .reticle-outer,
+  .reticle-inner {
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    border: 2px solid #ffd93b;
+    border-radius: 3px;
+    box-shadow: 0 0 12px rgba(255, 217, 59, 0.55), inset 0 0 8px rgba(255, 217, 59, 0.22);
+    transform: rotate(45deg);
+  }
+  .reticle-inner {
+    inset: 10px;
+    border-width: 1.5px;
+    border-color: #fff2b0;
+    box-shadow: 0 0 8px rgba(255, 242, 176, 0.65);
+  }
+  .reticle-core {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    background: #ffd93b;
+    border-radius: 1px;
+    transform: rotate(45deg);
+    box-shadow: 0 0 10px #ffe878;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .reticle-outer {
+      animation: reticlePulse 1.4s ease-in-out infinite;
+    }
+    .reticle-inner {
+      animation: reticleSpin 3.2s linear infinite;
+    }
+  }
+  @keyframes reticlePulse {
+    0%, 100% { transform: rotate(45deg) scale(1); }
+    50% { transform: rotate(45deg) scale(1.1); }
+  }
+  @keyframes reticleSpin {
+    from { transform: rotate(45deg) scale(0.96); }
+    to { transform: rotate(405deg) scale(0.96); }
+  }
+
+  /* Unified Responsive Top HUD Bar (zero collisions at desktop, half-screen, or mobile widths!) */
+  #topHudBar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 5;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    padding: max(10px, var(--safe-top)) max(12px, var(--safe-right)) 0 max(12px, var(--safe-left));
+    box-sizing: border-box;
+    pointer-events: none;
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  body.z-active #topHudBar {
+    transform: translate3d(0, 22px, 0);
+  }
+  #hudLeft {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-inline-size: 0;
+  }
+  #hud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-inline-size: 100%;
+    pointer-events: none;
+  }
+  #statusRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .pill {
+    background: rgba(14, 20, 40, 0.74);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 217, 59, 0.28);
+    box-shadow: 0 4px 16px rgba(6, 10, 22, 0.35), inset 0 1px 0 rgba(255, 240, 180, 0.12);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: clamp(0.72rem, 0.68rem + 0.25vw, 0.88rem);
+    line-height: 1.25;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+  }
+  .pill b { color: #ffd93b; }
+  .pill.relic {
+    display: none;
+    border-color: rgba(100, 246, 238, 0.55);
+    color: #9ffcf6;
+    box-shadow: 0 4px 18px rgba(38, 216, 212, 0.28), inset 0 1px 0 rgba(190, 255, 252, 0.22);
+  }
+  .pill.region {
+    color: #d6e4f5;
+    border-color: rgba(160, 200, 240, 0.28);
+  }
+
+  /* Atmospheric Zelda-style Region Title Banner */
+  #regionBanner {
+    position: fixed;
+    top: max(92px, calc(var(--safe-top) + 86px));
+    left: 50%;
+    transform: translate(-50%, -10px);
+    z-index: 6;
+    pointer-events: none;
+    text-align: center;
+    max-inline-size: 90dvw;
+    opacity: 0;
+    transition: opacity 0.65s ease, transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  #regionBanner.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  #regionBannerTitle {
+    margin: 0;
+    font-size: clamp(1.25rem, 0.95rem + 1.4vw, 1.85rem);
+    font-weight: 500;
+    letter-spacing: 2px;
+    color: #fff3cc;
+    text-shadow: 0 2px 18px rgba(8, 14, 30, 0.85), 0 0 24px rgba(255, 217, 59, 0.32);
+  }
+  #regionBannerSub {
+    margin: 4px 0 0;
+    font-size: clamp(0.68rem, 0.62rem + 0.3vw, 0.82rem);
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #c8def2;
+    text-shadow: 0 1px 10px rgba(8, 14, 30, 0.9);
+  }
+
+  /* Air meter (shown underwater inside #statusRow) */
+  #airWrap {
+    display: none;
+    width: clamp(104px, 24vw, 146px);
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(14, 20, 40, 0.74);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(106, 217, 208, 0.45);
+    box-shadow: 0 4px 14px rgba(6, 10, 22, 0.35);
+    overflow: hidden;
+  }
+  #airFill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #4ec6be, #8cf2eb);
+  }
+
+  /* 6-Heart Health HUD (flows directly beneath #hud pills) */
+  #heartsHud {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(14, 20, 40, 0.68);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 217, 59, 0.28);
+    box-shadow: 0 4px 14px rgba(6, 10, 22, 0.35);
+    pointer-events: none;
+  }
+  #heartsHud.low-hp {
+    border-color: rgba(255, 80, 105, 0.78);
+    animation: heartPulse 0.85s ease-in-out infinite;
+  }
+  @keyframes heartPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.045); }
+  }
+  .heartIcon {
+    width: 17px;
+    height: 17px;
+    display: inline-block;
+    filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.55));
+  }
+
+  /* Manual-aim center crosshair (hidden while Z-targeting) */
+  #aimReticle {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: 24px;
+    height: 24px;
+    margin: -12px 0 0 -12px;
+    z-index: 4;
+    pointer-events: none;
+    opacity: 0.72;
+    transition: opacity 0.16s ease, transform 0.12s ease;
+  }
+  body.z-active #aimReticle { opacity: 0; }
+  #aimReticle.pulse { transform: scale(1.38); opacity: 1; }
+  #aimReticle::before, #aimReticle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    background: rgba(255, 228, 130, 0.85);
+    box-shadow: 0 0 6px rgba(255, 217, 59, 0.75);
+  }
+  #aimReticle::before { width: 14px; height: 1.5px; margin: -0.75px 0 0 -7px; }
+  #aimReticle::after  { width: 1.5px; height: 14px; margin: -7px 0 0 -0.75px; }
+  #aimDot {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: #fff8d6;
+    box-shadow: 0 0 6px #ffd93b;
+  }
+
+  /* Red damage vignette flash */
+  #damageFlash {
+    position: fixed;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 50%, rgba(220, 30, 60, 0) 46%, rgba(215, 24, 58, 0.62) 100%);
+    opacity: 0;
+    transition: opacity 0.16s ease-out;
+  }
+
+  /* Respawn overlay on 0 HP */
+  #deathOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: radial-gradient(circle at 50% 45%, rgba(28, 16, 44, 0.78), rgba(8, 10, 22, 0.94));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.45s ease;
+  }
+  #deathOverlay.show { opacity: 1; }
+  #deathOverlay h2 {
+    margin: 0 0 10px;
+    font-size: 34px;
+    font-weight: normal;
+    color: #ff9eb0;
+    letter-spacing: 1px;
+    text-shadow: 0 2px 18px rgba(255, 80, 120, 0.45);
+  }
+  #deathOverlay p {
+    margin: 0;
+    font-size: 17px;
+    color: #dfe4f2;
+  }
+
+  /* Quest bar */
+  #questBar {
+    position: fixed;
+    bottom: max(14px, var(--safe-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    background: rgba(14, 20, 40, 0.76);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 217, 59, 0.3);
+    box-shadow: 0 6px 20px rgba(6, 10, 22, 0.4), inset 0 1px 0 rgba(255, 240, 180, 0.1);
+    border-radius: 14px;
+    padding: 8px 18px;
+    font-size: clamp(0.78rem, 0.74rem + 0.3vw, 0.95rem);
+    max-inline-size: min(86dvw, 640px);
+    text-align: center;
+    pointer-events: none;
+    transition: bottom 0.22s ease;
+  }
+  body.z-active #questBar {
+    bottom: max(32px, calc(var(--safe-bottom) + 26px));
+  }
+  #questText em { color: #ffd93b; font-style: normal; }
+
+  /* Top-right control buttons (lives inside #topHudBar right column so it NEVER overlaps #hud!) */
+  #topControls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    max-inline-size: 46%;
+    pointer-events: auto;
+  }
+  .hudBtn {
+    background: rgba(14, 20, 40, 0.74);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 217, 59, 0.3);
+    box-shadow: 0 4px 16px rgba(6, 10, 22, 0.35), inset 0 1px 0 rgba(255, 240, 180, 0.12);
+    border-radius: 999px;
+    min-block-size: var(--target-size);
+    min-inline-size: var(--target-size);
+    padding: 6px 13px;
+    font-size: clamp(0.72rem, 0.68rem + 0.22vw, 0.85rem);
+    line-height: 1.2;
+    font-family: inherit;
+    color: #ede8da;
+    cursor: pointer;
+    white-space: nowrap;
+    touch-action: manipulation;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .hudBtn:hover {
+    border-color: rgba(255, 217, 59, 0.65);
+    background: rgba(24, 34, 66, 0.84);
+  }
+  .hudBtn:focus-visible {
+    outline: 2px solid #ffd93b;
+    outline-offset: 2px;
+  }
+
+  /* Toggleable Controls Reminder Card */
+  #controlsPanel {
+    position: fixed;
+    top: max(56px, calc(var(--safe-top) + 52px));
+    right: max(12px, var(--safe-right));
+    z-index: 8;
+    width: 340px;
+    max-inline-size: calc(100dvw - 24px - var(--safe-left) - var(--safe-right));
+    max-block-size: calc(100dvh - 84px - var(--safe-top) - var(--safe-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-sizing: border-box;
+    background: rgba(14, 20, 40, 0.90);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 217, 59, 0.42);
+    box-shadow: 0 12px 32px rgba(6, 10, 22, 0.55), inset 0 1px 0 rgba(255, 240, 180, 0.14);
+    border-radius: 14px;
+    padding: 14px 16px 12px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  #controlsPanel.open {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  #controlsPanelHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 217, 59, 0.22);
+  }
+  #controlsPanelHeader strong {
+    color: #ffd93b;
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  #closeControlsBtn {
+    background: transparent;
+    border: none;
+    color: #c8d2e6;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    min-block-size: 32px;
+    min-inline-size: 32px;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  #closeControlsBtn:hover { color: #ffd93b; background: rgba(255, 217, 59, 0.12); }
+  #controlsPanelFooter {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 217, 59, 0.2);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  #touchToggleBtn {
+    width: 100%;
+    text-align: center;
+  }
+  .ctrlGrid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 5px 12px;
+    align-items: baseline;
+  }
+  .ctrlKey {
+    color: #ffd93b;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .ctrlDesc {
+    color: #e2e6f0;
+  }
+
+  /* Toast popups */
+  #toast {
+    position: fixed;
+    top: max(96px, calc(var(--safe-top) + 92px));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    background: rgba(14, 20, 40, 0.84);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 217, 59, 0.45);
+    box-shadow: 0 8px 24px rgba(6, 10, 22, 0.45);
+    padding: 10px 20px;
+    border-radius: 14px;
+    font-size: clamp(0.84rem, 0.78rem + 0.35vw, 1rem);
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    pointer-events: none;
+    text-align: center;
+    max-inline-size: min(88dvw, 520px);
+  }
+  #toast.show { opacity: 1; }
+
+  /* Mobile / Touch Virtual Controls (auto-shown on coarse pointers & toggleable in Controls) */
+  #touchControls {
+    position: fixed;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+    display: none;
+    touch-action: none;
+  }
+  body.touch-ui.game-started #touchControls {
+    display: block;
+  }
+  #touchJoyBase {
+    position: fixed;
+    left: max(18px, calc(var(--safe-left) + 14px));
+    bottom: max(20px, calc(var(--safe-bottom) + 14px));
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(20, 30, 58, 0.42), rgba(10, 15, 32, 0.66));
+    border: 2px solid rgba(255, 217, 59, 0.34);
+    box-shadow: 0 8px 24px rgba(4, 8, 20, 0.45), inset 0 0 16px rgba(255, 217, 59, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    touch-action: none;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+  #touchJoyBase.active {
+    border-color: rgba(255, 217, 59, 0.65);
+  }
+  #touchJoyBase.sprinting {
+    border-color: #ffd93b;
+    box-shadow: 0 0 22px rgba(255, 217, 59, 0.45), inset 0 0 18px rgba(255, 217, 59, 0.22);
+  }
+  #touchJoyKnob {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 32%, #fff0a8, #ffd93b 58%, #c9921e);
+    border: 2px solid rgba(255, 250, 224, 0.85);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 12px rgba(255, 217, 59, 0.35);
+    pointer-events: none;
+    will-change: transform;
+  }
+  #touchJoyHint {
+    position: absolute;
+    bottom: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: rgba(235, 228, 205, 0.72);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  #touchActions {
+    position: fixed;
+    right: max(16px, calc(var(--safe-right) + 12px));
+    bottom: max(18px, calc(var(--safe-bottom) + 12px));
+    width: 174px;
+    height: 158px;
+    pointer-events: none;
+  }
+  .touchBtn {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(14, 22, 44, 0.76);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1.5px solid rgba(255, 217, 59, 0.42);
+    box-shadow: 0 6px 18px rgba(4, 8, 20, 0.48), inset 0 1px 0 rgba(255, 245, 200, 0.16);
+    color: #fff3d1;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    line-height: 1.05;
+    padding: 0;
+    pointer-events: auto;
+    touch-action: none;
+    cursor: pointer;
+    transition: transform 0.08s ease, background-color 0.12s ease, border-color 0.12s ease;
+  }
+  .touchBtn .tGlyph {
+    font-size: 15px;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+  .touchBtn.pressed {
+    transform: scale(0.90);
+    background: rgba(42, 56, 98, 0.90);
+    border-color: #ffd93b;
+  }
+  #touchStrike {
+    width: 64px;
+    height: 64px;
+    right: 62px;
+    bottom: 6px;
+    border-color: rgba(255, 217, 59, 0.72);
+    background: radial-gradient(circle at 38% 30%, rgba(72, 58, 24, 0.86), rgba(18, 24, 48, 0.86));
+  }
+  #touchJump {
+    width: 56px;
+    height: 56px;
+    right: 0;
+    bottom: 22px;
+    border-color: rgba(106, 217, 208, 0.65);
+    color: #c8fffb;
+  }
+  #touchStar {
+    width: 54px;
+    height: 54px;
+    right: 68px;
+    bottom: 78px;
+    border-color: rgba(255, 224, 112, 0.68);
+  }
+  #touchRoll {
+    width: 50px;
+    height: 50px;
+    right: 126px;
+    bottom: 42px;
+    border-color: rgba(164, 202, 246, 0.56);
+    color: #dcecff;
+  }
+  #touchLock {
+    width: 48px;
+    height: 48px;
+    right: 8px;
+    bottom: 88px;
+    border-color: rgba(255, 217, 59, 0.45);
+  }
+  #touchLock.active {
+    background: rgba(255, 217, 59, 0.28);
+    border-color: #ffd93b;
+    box-shadow: 0 0 16px rgba(255, 217, 59, 0.55);
+    color: #fff8d0;
+  }
+  body.touch-ui.game-started #questBar {
+    bottom: max(182px, calc(var(--safe-bottom) + 176px));
+    max-inline-size: min(86dvw, 440px);
+    padding: 6px 14px;
+  }
+
+  /* Start screen (scrollable on short & mobile viewports) */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: radial-gradient(circle at 50% 25%, #2b3a63 0%, #161f38 58%, #0e1426 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: safe center;
+    text-align: center;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    box-sizing: border-box;
+    padding: max(22px, var(--safe-top)) max(20px, var(--safe-right)) max(24px, var(--safe-bottom)) max(20px, var(--safe-left));
+  }
+  #overlay h1 {
+    font-size: clamp(1.9rem, 1.2rem + 3vw, 2.75rem);
+    margin: 0 0 4px;
+    color: #ffd93b;
+    font-weight: normal;
+    letter-spacing: 1px;
+    text-shadow: 0 2px 16px rgba(255, 217, 59, 0.25);
+  }
+  #overlay h2 {
+    font-size: clamp(0.95rem, 0.85rem + 0.5vw, 1.2rem);
+    margin: 0 0 16px;
+    color: #b4c2dc;
+    font-weight: normal;
+    font-style: italic;
+  }
+  #overlay p.story {
+    margin: 6px 0;
+    font-size: clamp(0.92rem, 0.86rem + 0.35vw, 1.08rem);
+    line-height: 1.55;
+    max-inline-size: 560px;
+  }
+  #playBtn {
+    margin-top: 20px;
+    font-family: inherit;
+    font-size: clamp(1.1rem, 1rem + 0.5vw, 1.38rem);
+    min-block-size: 46px;
+    padding: 11px 48px;
+    border: 1px solid rgba(255, 240, 170, 0.65);
+    border-radius: 999px;
+    background: #ffd93b;
+    color: #241e0c;
+    cursor: pointer;
+    touch-action: manipulation;
+    box-shadow: 0 6px 24px rgba(255, 217, 59, 0.3);
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+  #playBtn:hover {
+    background: #ffe480;
+    transform: translateY(-1px);
+  }
+  #controls {
+    margin-top: 18px;
+    font-size: clamp(0.76rem, 0.72rem + 0.25vw, 0.88rem);
+    line-height: 1.7;
+    color: #b4c2dc;
+    max-inline-size: 700px;
+  }
+  .touchOnlyHint {
+    display: none;
+    color: #ffe89e;
+    margin-top: 6px;
+  }
+  @media (pointer: coarse) {
+    .touchOnlyHint { display: block; }
+  }
+
+  /* Half-screen & tablet breakpoint (<= 980px) */
+  @media (max-width: 980px) {
+    #topHudBar {
+      gap: 6px;
+      padding: max(8px, var(--safe-top)) max(10px, var(--safe-right)) 0 max(10px, var(--safe-left));
+    }
+    .pill { padding: 4px 10px; }
+    .hudBtn { padding: 5px 11px; }
+    #topControls { max-inline-size: 44%; }
+  }
+
+  /* Compact phone portrait & narrow half-screen (<= 640px) */
+  @media (max-width: 640px) {
+    #letterboxTop, #letterboxBot { height: 18px; }
+    body.z-active #topHudBar { transform: translate3d(0, 14px, 0); }
+    #topHudBar {
+      gap: 6px;
+      padding: max(6px, var(--safe-top)) max(8px, var(--safe-right)) 0 max(8px, var(--safe-left));
+    }
+    #hud { gap: 4px; }
+    #hudLeft { gap: 4px; }
+    .pill { padding: 3px 8px; }
+    #heartsHud { padding: 3px 8px; gap: 4px; }
+    .heartIcon { width: 14px; height: 14px; }
+    #topControls {
+      gap: 4px;
+      max-inline-size: 42%;
+    }
+    .hudBtn {
+      padding: 4px 9px;
+      min-block-size: 32px;
+    }
+    #touchJoyBase {
+      width: 112px;
+      height: 112px;
+      left: max(12px, calc(var(--safe-left) + 8px));
+      bottom: max(28px, calc(var(--safe-bottom) + 22px));
+    }
+    #touchActions {
+      right: max(10px, calc(var(--safe-right) + 8px));
+      bottom: max(16px, calc(var(--safe-bottom) + 12px));
+    }
+  }
+
+  /* Compact phones (<= 480px) */
+  @media (max-width: 480px) {
+    .pill { font-size: 11px; padding: 3px 7px; }
+    .hudBtn { font-size: 11px; padding: 4px 8px; }
+    #topControls { max-inline-size: 40%; }
+  }
+
+  /* Short mobile landscape viewports (<= 540px tall) */
+  @media (max-height: 540px) {
+    #topHudBar {
+      padding: max(6px, var(--safe-top)) max(10px, var(--safe-right)) 0 max(10px, var(--safe-left));
+    }
+    .pill { padding: 3px 8px; font-size: 11.5px; }
+    .hudBtn { padding: 4px 9px; font-size: 11.5px; min-block-size: 30px; }
+    .heartIcon { width: 14px; height: 14px; }
+    #touchJoyBase { width: 102px; height: 102px; bottom: max(14px, var(--safe-bottom)); }
+    #touchJoyKnob { width: 42px; height: 42px; }
+    #touchActions { transform: scale(0.88); transform-origin: right bottom; bottom: max(10px, var(--safe-bottom)); }
+    body.touch-ui.game-started #questBar {
+      bottom: max(10px, var(--safe-bottom));
+      max-inline-size: min(44dvw, 320px);
+      font-size: 12px;
+      padding: 5px 10px;
+    }
+    #regionBanner { top: max(70px, calc(var(--safe-top) + 64px)); }
+    #toast { top: max(70px, calc(var(--safe-top) + 64px)); padding: 7px 14px; }
+    #overlay h1 { margin-bottom: 2px; }
+    #overlay h2 { margin-bottom: 8px; }
+    #overlay p.story { margin: 4px 0; line-height: 1.4; }
+    #playBtn { margin-top: 12px; padding: 8px 36px; }
+    #controls { margin-top: 10px; line-height: 1.45; }
+  }
+</style>
+</head>
+<body>
+
+<div id="letterboxTop"></div>
+<div id="letterboxBot"></div>
+<div id="lockReticle">
+  <div class="reticle-wrap">
+    <div class="reticle-outer"></div>
+    <div class="reticle-inner"></div>
+    <div class="reticle-core"></div>
+  </div>
+</div>
+
+<header id="topHudBar">
+  <div id="hudLeft">
+    <div id="hud">
+      <div class="pill">Stars <b id="starCount">0</b></div>
+      <div class="pill">Friends <b id="friendCount">0</b></div>
+      <div class="pill">Sky relit <b id="litCount">0</b>/8</div>
+      <div class="pill">Secrets <b id="secretCount">0</b>/6</div>
+      <div id="regionPill" class="pill region">Star Sanctuary</div>
+      <div id="relicBadge" class="pill relic">&#10022; Tidecaller's Pearl</div>
+    </div>
+    <div id="statusRow">
+      <div id="heartsHud" aria-label="Health"></div>
+      <div id="airWrap"><div id="airFill"></div></div>
+    </div>
+  </div>
+  <div id="topControls">
+    <button id="controlsBtn" class="hudBtn" type="button">Controls (H)</button>
+    <button id="qualityBtn" class="hudBtn" type="button">Quality: High</button>
+    <button id="soundBtn" class="hudBtn" type="button">Sound: On</button>
+  </div>
+</header>
+
+<div id="regionBanner" aria-live="polite">
+  <h3 id="regionBannerTitle">Star Sanctuary</h3>
+  <p id="regionBannerSub">Ancient Hilltop of the First Lantern</p>
+</div>
+<div id="aimReticle"><div id="aimDot"></div></div>
+<div id="damageFlash"></div>
+<div id="deathOverlay">
+  <h2>The Gloom Overwhelmed You</h2>
+  <p>Wish guides you back to the Star Sanctuary&hellip;</p>
+</div>
+<div id="questBar"><span id="questText">Wish awaits...</span></div>
+<aside id="controlsPanel" aria-hidden="true">
+  <div id="controlsPanelHeader">
+    <strong>Controls</strong>
+    <button id="closeControlsBtn" type="button" aria-label="Close controls">&times;</button>
+  </div>
+  <div class="ctrlGrid">
+    <span class="ctrlKey">W A S D / Arrows</span><span class="ctrlDesc">Move &amp; swim</span>
+    <span class="ctrlKey">Hold Shift</span><span class="ctrlDesc">Sprint (fast run &amp; swim)</span>
+    <span class="ctrlKey">Hold C / X + Dir</span><span class="ctrlDesc">True side / back / forward roll</span>
+    <span class="ctrlKey">Space</span><span class="ctrlDesc">Jump (tap short / hold high) &bull; Swim up</span>
+    <span class="ctrlKey">Look Down + Move</span><span class="ctrlDesc">Dive underwater (watch your air!)</span>
+    <span class="ctrlKey">Left-Click &times;3</span><span class="ctrlDesc">Left &rarr; Right &rarr; 360&deg; Spin &bull; Sprint/Roll-Slash &bull; Air Slam</span>
+    <span class="ctrlKey">F &times;3</span><span class="ctrlDesc">Star Bolt &rarr; Twin Bolts &rarr; Exploding Star-Orb</span>
+    <span class="ctrlKey">Click &rarr; F / &times;2 &rarr; F</span><span class="ctrlDesc">3-Bolt Star-Fan / Piercing Comet Lance</span>
+    <span class="ctrlKey">Click &times;3 &rarr; F</span><span class="ctrlDesc">360&deg; Constellation Nova (6-bolt ring)</span>
+    <span class="ctrlKey">F &rarr; Click / F &times;2 &rarr; Click</span><span class="ctrlDesc">Starlight Dash-Cut / Comet Dash-Whirl</span>
+    <span class="ctrlKey">Tab / Right-Click</span><span class="ctrlDesc">Z-Target lock-on</span>
+    <span class="ctrlKey">Drag / Q E / Wheel</span><span class="ctrlDesc">Orbit camera &amp; zoom</span>
+    <span class="ctrlKey">V</span><span class="ctrlDesc">Toggle First / Third Person</span>
+    <span class="ctrlKey">H / ?</span><span class="ctrlDesc">Toggle this controls guide</span>
+    <span class="ctrlKey">Mobile / Touch</span><span class="ctrlDesc">Left stick move/sprint &bull; Drag screen to look &bull; Right buttons act</span>
+  </div>
+  <div id="controlsPanelFooter">
+    <button id="touchToggleBtn" class="hudBtn" type="button">Touch Controls: Off</button>
+  </div>
+</aside>
+<div id="toast"></div>
+
+<div id="touchControls" aria-label="Touch game controls">
+  <div id="touchJoyBase" role="application" aria-label="Move and sprint joystick">
+    <div id="touchJoyKnob"></div>
+    <span id="touchJoyHint" aria-hidden="true">Push far to sprint</span>
+  </div>
+  <div id="touchActions">
+    <button id="touchStrike" class="touchBtn" type="button" aria-label="Staff melee strike"><span class="tGlyph" aria-hidden="true">&#9876;</span>Strike</button>
+    <button id="touchJump" class="touchBtn" type="button" aria-label="Jump or swim up"><span class="tGlyph" aria-hidden="true">&#8593;</span>Jump</button>
+    <button id="touchStar" class="touchBtn" type="button" aria-label="Shoot Star Bolt"><span class="tGlyph" aria-hidden="true">&#10022;</span>Star</button>
+    <button id="touchRoll" class="touchBtn" type="button" aria-label="Dodge roll"><span class="tGlyph" aria-hidden="true">&#8635;</span>Roll</button>
+    <button id="touchLock" class="touchBtn" type="button" aria-label="Toggle Z-Target lock-on"><span class="tGlyph" aria-hidden="true">&#9670;</span>Lock</button>
+  </div>
+</div>
+
+<div id="overlay">
+  <h1>Blobby Worlds</h1>
+  <h2>The Starkeeper</h2>
+  <p class="story">One night, every star fell from the sky, and the world slipped into gloom.
+     Fierce shadow-beasts &mdash; the Gloomblobs &mdash; now hoard every last sparkle.</p>
+  <p class="story">You are the Starkeeper. Gather fallen stars, strike open gloom-cocoons with your
+     Star-Lantern Staff, chain combos and aimed Star Bolts against the Gloomblobs,
+     and carry starlight to the ancient Star Totems to relight the sky.</p>
+  <p class="story">Wild Starlings are shy: they'll bolt when you come near. Chase one gently
+     until it tires, stay close, and it will join your band. Friends fight beside you and
+     defend themselves &mdash; protect them, because Gloomblobs strike back!</p>
+  <button id="playBtn">Begin</button>
+  <div id="controls">
+    Move &amp; swim: W A S D / Arrows &nbsp;&nbsp; Sprint: Hold Shift &nbsp;&nbsp; Directional Roll: Hold C / X + Direction &nbsp;&nbsp; Jump / Swim up: Space<br>
+    Staff Melee Combo / Roll-Strike / Air Slam: Left-Click &nbsp;&nbsp; Aimed Star Bolt: F &nbsp;&nbsp; Z-Target: Tab / Right-Click<br>
+    Dive: aim camera down + move &nbsp;&nbsp; Camera: drag (or Q / E) &nbsp;&nbsp; Zoom: wheel &nbsp;&nbsp; View: V &nbsp;&nbsp; Controls help: H
+    <div class="touchOnlyHint">Touch: Left stick to move &amp; sprint &bull; Drag screen to look &bull; Pinch to zoom &bull; Right buttons to strike, cast, jump, roll &amp; lock</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="vendor/GLTFLoader.js"></script>
+<script src="vendor/SkeletonUtils.js"></script>
+<script src="audio.js"></script>
+<script src="textures.js"></script>
+<script src="shaders.js"></script>
+<script src="regions.js"></script>
+<script src="world.js"></script>
+<script src="models.js"></script>
+<script src="rig.js"></script>
+<script src="physics.js"></script>
+<script src="animals.js"></script>
+<script src="enemies.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

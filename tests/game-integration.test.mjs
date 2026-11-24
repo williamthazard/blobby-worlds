@@ -1,0 +1,1426 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+
+function makeMockThree() {
+  class Vector2 {
+    constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+    set(x, y) { this.x = x; this.y = y; return this; }
+  }
+  class Vector3 {
+    constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+    setY(y) { this.y = y; return this; }
+    setScalar(s) { this.x = this.y = this.z = s; return this; }
+    copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
+    clone() { return new Vector3(this.x, this.y, this.z); }
+    addScaledVector(v, s) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
+    subVectors(a, b) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
+    normalize() {
+      const l = Math.hypot(this.x, this.y, this.z) || 1;
+      this.x /= l; this.y /= l; this.z /= l;
+      return this;
+    }
+    lerp(v, a) {
+      this.x += (v.x - this.x) * a;
+      this.y += (v.y - this.y) * a;
+      this.z += (v.z - this.z) * a;
+      return this;
+    }
+    distanceTo(v) {
+      return Math.hypot(this.x - v.x, this.y - v.y, this.z - v.z);
+    }
+    dot(v) { return this.x * v.x + this.y * v.y + this.z * v.z; }
+    project() {
+      this.x = 0;
+      this.y = 0;
+      this.z = 0.5;
+      return this;
+    }
+  }
+  class Euler {
+    constructor(x = 0, y = 0, z = 0, order = 'XYZ') {
+      this.x = x; this.y = y; this.z = z; this.order = order;
+    }
+    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+  }
+  class Quaternion {
+    constructor(x = 0, y = 0, z = 0, w = 1) {
+      this.x = x; this.y = y; this.z = z; this.w = w;
+    }
+    set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
+    copy(q) { this.x = q.x; this.y = q.y; this.z = q.z; this.w = q.w; return this; }
+    clone() { return new Quaternion(this.x, this.y, this.z, this.w); }
+    identity() { this.x = 0; this.y = 0; this.z = 0; this.w = 1; return this; }
+    setFromEuler() { return this; }
+    setFromAxisAngle(axis, angle) {
+      const s = Math.sin(angle * 0.5);
+      this.x = axis.x * s;
+      this.y = axis.y * s;
+      this.z = axis.z * s;
+      this.w = Math.cos(angle * 0.5);
+      return this;
+    }
+    multiply(q) {
+      const ax = this.x, ay = this.y, az = this.z, aw = this.w;
+      const bx = q.x, by = q.y, bz = q.z, bw = q.w;
+      this.x = aw * bx + ax * bw + ay * bz - az * by;
+      this.y = aw * by - ax * bz + ay * bw + az * bx;
+      this.z = aw * bz + ax * by - ay * bx + az * bw;
+      this.w = aw * bw - ax * bx - ay * by - az * bz;
+      return this;
+    }
+    slerp(q, t) {
+      this.x += (q.x - this.x) * t;
+      this.y += (q.y - this.y) * t;
+      this.z += (q.z - this.z) * t;
+      this.w += (q.w - this.w) * t;
+      return this;
+    }
+  }
+  class Matrix4 {
+    constructor() { this.elements = new Float32Array(16); }
+    compose() { return this; }
+    copy(m) { this.elements.set(m.elements); return this; }
+  }
+  class Color {
+    constructor(c = 0xffffff) { this.r = 1; this.g = 1; this.b = 1; this.setHex(c); }
+    setHex(hex) {
+      if (typeof hex === 'number') {
+        this.r = ((hex >> 16) & 255) / 255;
+        this.g = ((hex >> 8) & 255) / 255;
+        this.b = (hex & 255) / 255;
+      }
+      return this;
+    }
+    setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; }
+    copy(c) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
+    clone() { return new Color().copy(this); }
+    multiplyScalar(s) { this.r *= s; this.g *= s; this.b *= s; return this; }
+    lerp(c, a) {
+      this.r += (c.r - this.r) * a;
+      this.g += (c.g - this.g) * a;
+      this.b += (c.b - this.b) * a;
+      return this;
+    }
+    lerpColors(a, b, t) {
+      this.r = a.r + (b.r - a.r) * t;
+      this.g = a.g + (b.g - a.g) * t;
+      this.b = a.b + (b.b - a.b) * t;
+      return this;
+    }
+    convertSRGBToLinear() { return this; }
+  }
+  class Object3D {
+    constructor() {
+      this.children = [];
+      this.parent = null;
+      this.position = new Vector3();
+      this.rotation = new Euler();
+      this.quaternion = new Quaternion();
+      this.scale = new Vector3(1, 1, 1);
+      this.matrix = new Matrix4();
+      this.userData = {};
+      this.visible = true;
+      this.castShadow = false;
+      this.receiveShadow = false;
+      this.frustumCulled = true;
+    }
+    add(...items) {
+      for (const c of items) {
+        if (!c) continue;
+        c.parent = this;
+        this.children.push(c);
+      }
+      return this;
+    }
+    remove(item) {
+      const idx = this.children.indexOf(item);
+      if (idx >= 0) {
+        this.children.splice(idx, 1);
+        item.parent = null;
+      }
+    }
+    traverse(fn) {
+      fn(this);
+      for (let i = 0; i < this.children.length; i++) {
+        this.children[i].traverse(fn);
+      }
+    }
+    updateMatrix() {}
+    updateMatrixWorld() {}
+    lookAt() {}
+    rotateX() {}
+    getWorldDirection(v) { return v.set(0, 0, 1); }
+  }
+  class Scene extends Object3D {
+    constructor() {
+      super();
+      this.addCalls = 0;
+    }
+    add(...items) {
+      this.addCalls += items.length;
+      return super.add(...items);
+    }
+  }
+  class Geo {
+    constructor(kind = 'geo') { this.kind = kind; }
+    translate() { return this; }
+    rotateX() { return this; }
+    rotateY() { return this; }
+    rotateZ() { return this; }
+    scale() { return this; }
+    computeVertexNormals() { return this; }
+    dispose() {}
+  }
+  class Mat {
+    constructor(opts = {}) {
+      this.color = new Color(opts.color !== undefined ? opts.color : 0xffffff);
+      this.emissive = new Color(opts.emissive !== undefined ? opts.emissive : 0x000000);
+      this.emissiveIntensity = opts.emissiveIntensity !== undefined ? opts.emissiveIntensity : 1;
+      Object.assign(this, opts);
+      this.color = new Color(opts.color !== undefined ? opts.color : 0xffffff);
+      this.emissive = new Color(opts.emissive !== undefined ? opts.emissive : 0x000000);
+    }
+    clone() { return new Mat({ ...this }); }
+    dispose() {}
+  }
+  class InstancedMesh extends Object3D {
+    constructor(geometry, material, count) {
+      super();
+      this.geometry = geometry;
+      this.material = material;
+      this.count = count;
+      this.instanceMatrix = { array: new Float32Array(count * 16), needsUpdate: false };
+      this.instanceColor = null;
+    }
+    setMatrixAt(i, m) {
+      this.instanceMatrix.array.set(m.elements, i * 16);
+    }
+    setColorAt(i, c) {
+      if (!this.instanceColor) {
+        this.instanceColor = { array: new Float32Array(this.count * 3), needsUpdate: false };
+      }
+      this.instanceColor.array[i * 3] = c.r;
+      this.instanceColor.array[i * 3 + 1] = c.g;
+      this.instanceColor.array[i * 3 + 2] = c.b;
+    }
+  }
+  class Mesh extends Object3D {
+    constructor(g, m) { super(); this.geometry = g; this.material = m; }
+  }
+  class Sprite extends Object3D {
+    constructor(m) { super(); this.material = m; }
+  }
+  class PointLight extends Object3D {
+    constructor(c, i, d) { super(); this.color = c; this.intensity = i; this.distance = d; }
+  }
+  class PerspectiveCamera extends Object3D {
+    constructor() { super(); }
+    updateProjectionMatrix() {}
+  }
+
+  return {
+    Vector2,
+    Vector3,
+    Euler,
+    Quaternion,
+    Matrix4,
+    Color,
+    Object3D,
+    Group: Object3D,
+    Scene,
+    Mesh,
+    InstancedMesh,
+    Sprite,
+    PointLight,
+    PerspectiveCamera,
+    DoubleSide: 2,
+    AdditiveBlending: 2,
+    MathUtils: {
+      clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
+      smoothstep: (x, a, b) => {
+        const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+        return t * t * (3 - 2 * t);
+      },
+    },
+    MeshStandardMaterial: Mat,
+    MeshBasicMaterial: Mat,
+    SpriteMaterial: Mat,
+    SphereGeometry: Geo,
+    CylinderGeometry: Geo,
+    ConeGeometry: Geo,
+    BoxGeometry: Geo,
+    TorusGeometry: Geo,
+    OctahedronGeometry: Geo,
+    IcosahedronGeometry: Geo,
+    DodecahedronGeometry: Geo,
+    PlaneGeometry: Geo,
+    RingGeometry: Geo,
+  };
+}
+
+function makeMockDocument() {
+  const elements = new Map();
+  const makeEl = (id) => {
+    const classes = new Set();
+    const listeners = {};
+    const el = {
+      id,
+      textContent: '',
+      style: {},
+      classList: {
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+        toggle: (c, force) => {
+          if (force === undefined) {
+            if (classes.has(c)) classes.delete(c);
+            else classes.add(c);
+          } else if (force) classes.add(c);
+          else classes.delete(c);
+          return classes.has(c);
+        },
+        contains: (c) => classes.has(c),
+      },
+      addEventListener: (ev, fn) => {
+        (listeners[ev] ||= []).push(fn);
+      },
+      click: () => {
+        for (const fn of (listeners.click || [])) fn({ target: el });
+      },
+    };
+    elements.set(id, el);
+    return el;
+  };
+  for (const id of [
+    'starCount', 'friendCount', 'litCount', 'airWrap', 'airFill',
+    'questBar', 'questText', 'toast', 'overlay', 'playBtn',
+    'soundBtn', 'qualityBtn', 'lockReticle', 'letterboxTop', 'letterboxBot',
+  ]) {
+    makeEl(id);
+  }
+  const bodyClasses = new Set();
+  return {
+    elements,
+    body: {
+      classList: {
+        toggle: (c, force) => {
+          if (force === undefined) {
+            if (bodyClasses.has(c)) bodyClasses.delete(c);
+            else bodyClasses.add(c);
+          } else if (force) bodyClasses.add(c);
+          else bodyClasses.delete(c);
+          return bodyClasses.has(c);
+        },
+        contains: (c) => bodyClasses.has(c),
+      },
+    },
+    getElementById: (id) => elements.get(id) || makeEl(id),
+  };
+}
+
+function loadGameHarness({ hash = '' } = {}) {
+  const THREE = makeMockThree();
+  const doc = makeMockDocument();
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera();
+  const renderer = {
+    domElement: {
+      listeners: {},
+      addEventListener(ev, fn) { (this.listeners[ev] ||= []).push(fn); },
+      removeEventListener() {},
+    },
+  };
+
+  let quality = 'high';
+  let skyProgress = 0;
+  let totemCol = null;
+  let colliders = [];
+  const rafQueue = [];
+
+  const audioCode = fs.readFileSync(new URL('../audio.js', import.meta.url), 'utf8');
+  const regionsCode = fs.readFileSync(new URL('../regions.js', import.meta.url), 'utf8');
+  const modelsCode = fs.readFileSync(new URL('../models.js', import.meta.url), 'utf8');
+  const rigCode = fs.readFileSync(new URL('../rig.js', import.meta.url), 'utf8');
+  const physicsCode = fs.readFileSync(new URL('../physics.js', import.meta.url), 'utf8');
+  const animalsCode = fs.readFileSync(new URL('../animals.js', import.meta.url), 'utf8');
+  const enemiesCode = fs.readFileSync(new URL('../enemies.js', import.meta.url), 'utf8');
+  const gameCode = fs.readFileSync(new URL('../game.js', import.meta.url), 'utf8');
+
+  const makeAudioParam = () => ({
+    value: 0,
+    setValueAtTime: () => {},
+    linearRampToValueAtTime: () => {},
+    exponentialRampToValueAtTime: () => {},
+    setTargetAtTime: () => {},
+  });
+  const windowObj = {
+    AudioContext: function () {
+      return {
+        currentTime: 0,
+        sampleRate: 44100,
+        destination: {},
+        resume: () => {},
+        createGain: () => ({ gain: makeAudioParam(), connect: () => {} }),
+        createBiquadFilter: () => ({ type: 'lowpass', frequency: makeAudioParam(), Q: makeAudioParam(), connect: () => {} }),
+        createOscillator: () => ({ type: 'sine', frequency: makeAudioParam(), detune: makeAudioParam(), connect: () => {}, start: () => {}, stop: () => {} }),
+        createBuffer: (_c, l) => ({ getChannelData: () => new Float32Array(l) }),
+        createBufferSource: () => ({ buffer: null, connect: () => {}, start: () => {}, stop: () => {} }),
+      };
+    },
+  };
+  const sandbox = {
+    Math,
+    Number,
+    Array,
+    Object,
+    Map,
+    Set,
+    Float32Array,
+    console,
+    performance: { now: () => 1000 },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    requestAnimationFrame: (fn) => { rafQueue.push(fn); return rafQueue.length; },
+    addEventListener: () => {},
+    innerWidth: 1280,
+    innerHeight: 720,
+    location: { hash },
+    document: doc,
+    window: windowObj,
+    THREE,
+    Textures: { sets: {} },
+    Shaders: {
+      MAX_TRAMPLERS: 16,
+      tramplers: Array.from({ length: 16 }, () => ({ x: 0, y: -999, z: 0, w: 0 })),
+      setTrampler(i, x, y, z, r) {
+        if (i >= 0 && i < 16) {
+          this.tramplers[i].x = x;
+          this.tramplers[i].y = y;
+          this.tramplers[i].z = z;
+          this.tramplers[i].w = r;
+        }
+      },
+      clearTramplersFrom(start) {
+        for (let i = Math.max(0, start | 0); i < 16; i++) {
+          this.tramplers[i].x = 0;
+          this.tramplers[i].y = -999;
+          this.tramplers[i].z = 0;
+          this.tramplers[i].w = 0;
+        }
+      },
+      waterHeightAt: () => 0,
+      createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()),
+    },
+    WATER_Y: 0,
+    DAY_SKY_MAX_LIT: 8,
+    heightAt: () => 2.0,
+    terrainNormalAt: (_x, _z, out) => {
+      const o = out || {};
+      o.x = 0; o.y = 1; o.z = 0;
+      return o;
+    },
+    surfaceAt: () => 'grass',
+    setTotemCollider: (x, z, r) => { totemCol = { x, z, r }; },
+    clearTotemCollider: () => { totemCol = null; },
+    getNearbyColliders: (x, z, rad, out) => {
+      const arr = out || [];
+      arr.length = 0;
+      for (const c of colliders) {
+        if (Math.hypot(c.x - x, c.z - z) <= rad + c.r) arr.push(c);
+      }
+      if (totemCol && Math.hypot(totemCol.x - x, totemCol.z - z) <= rad + totemCol.r) {
+        arr.push(totemCol);
+      }
+      return arr;
+    },
+    landSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: 2.0 }),
+    waterSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: -4.0 }),
+    constellationNameFor: (n) => 'Constellation ' + n,
+    addConstellation: () => {},
+    setQuality: (m) => { quality = m === 'balanced' ? 'balanced' : 'high'; return quality; },
+    getQuality: () => quality,
+    setSkyProgress: (lit) => { skyProgress = lit; },
+    updateChunks: () => {},
+    updateEnvironment: () => {},
+    scene,
+    camera,
+    renderer,
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.renderer.render = () => {};
+
+  vm.runInNewContext(
+    audioCode + '\n' + regionsCode + '\n' +
+    'var worldLandmarks = Regions.buildWorldLandmarks(scene, heightAt, terrainNormalAt, Textures);\n' +
+    modelsCode + '\n' + rigCode + '\n' + physicsCode + '\n' + animalsCode + '\n' + enemiesCode + '\n' + gameCode,
+    sandbox
+  );
+
+  return {
+    sandbox,
+    dbg: sandbox.window.__GAME_DEBUG__ || sandbox.__GAME_DEBUG__,
+    doc,
+    scene,
+    THREE,
+    rafQueue,
+    getTotemCol: () => totemCol,
+    setColliders: (c) => { colliders = c; },
+    getQualityState: () => quality,
+    getSkyProgress: () => skyProgress,
+  };
+}
+
+test('index.html fixes typo, loads scripts in exact order, and includes upgraded HUD & Z-target elements', () => {
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(!html.includes("they\\'ll"), 'must fix escaped they\\\'ll typo');
+  assert.ok(html.includes("they'll"), "must contain proper they'll contraction");
+  assert.ok(html.includes('backdrop-filter: blur(8px)'), 'HUD pills should use backdrop-filter blur');
+  assert.ok(html.includes('id="qualityBtn"'), 'must include #qualityBtn');
+  assert.ok(html.includes('Quality: High'), 'must label #qualityBtn Quality: High initially');
+  assert.ok(html.includes('id="soundBtn"'), 'must include #soundBtn');
+  assert.ok(html.includes('id="lockReticle"'), 'must include #lockReticle');
+  assert.ok(html.includes('id="letterboxTop"'), 'must include #letterboxTop');
+  assert.ok(html.includes('id="letterboxBot"'), 'must include #letterboxBot');
+  assert.ok(html.includes('id="controlsBtn"'), 'must include #controlsBtn in HUD');
+  assert.ok(html.includes('id="controlsPanel"'), 'must include toggleable #controlsPanel');
+  assert.ok(html.includes('id="heartsHud"'), 'must include #heartsHud for 6 hearts');
+  assert.ok(html.includes('id="topHudBar"'), 'must wrap top HUD in responsive #topHudBar container');
+  assert.ok(html.includes('id="statusRow"'), 'must stack hearts & air meter cleanly in flow inside #statusRow');
+  assert.ok(html.includes('id="touchControls"') && html.includes('id="touchJoyBase"') && html.includes('id="touchToggleBtn"'), 'must include responsive mobile touch controls & toggle');
+  assert.ok(html.includes('viewport-fit=cover'), 'viewport meta must include viewport-fit=cover for mobile notches');
+  assert.ok(html.includes('id="aimReticle"'), 'must include manual #aimReticle crosshair');
+  assert.ok(html.includes('id="damageFlash"'), 'must include #damageFlash vignette');
+  assert.ok(html.includes('id="deathOverlay"'), 'must include #deathOverlay respawn screen');
+  assert.ok(html.includes('z-active'), 'must include .z-active letterbox state');
+  assert.ok(html.includes('Shift'), 'controls must document Shift sprint');
+  assert.ok(html.includes('C / X') || html.includes('C or X'), 'controls must document C/X directional roll');
+  assert.ok(html.includes('Tab') && html.includes('Right-Click'), 'controls must document Tab / Right-Click lock-on');
+
+  const scripts = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(scripts, [
+    'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+    'vendor/GLTFLoader.js',
+    'vendor/SkeletonUtils.js',
+    'audio.js',
+    'textures.js',
+    'shaders.js',
+    'regions.js',
+    'world.js',
+    'models.js',
+    'rig.js',
+    'physics.js',
+    'animals.js',
+    'enemies.js',
+    'game.js',
+  ]);
+});
+
+test('game.js exposes window.__GAME_DEBUG__, wires Physics/Models, and toggles quality button', () => {
+  const { dbg, doc, getQualityState } = loadGameHarness({ hash: '#test' });
+  assert.ok(dbg, 'window.__GAME_DEBUG__ must be defined');
+  for (const key of [
+    'P', 'Physics', 'Models', 'Shaders', 'Textures', 'scene', 'camera', 'renderer',
+    'glooms', 'cocoons', 'pickups', 'wild', 'followers', 'getTotem',
+    'heightAt', 'terrainNormalAt', 'getNearbyColliders', 'setQuality',
+    'setSkyProgress', 'lightTotem', 'shoot', 'spawnGloom', 'spawnCocoon',
+  ]) {
+    assert.ok(key in dbg, `debug handle must expose ${key}`);
+  }
+  assert.ok(dbg.player.userData.pelvis, 'player must be created via Models.makePlayer()');
+  assert.ok(dbg.wish.mesh.userData.wings && dbg.wish.mesh.userData.halo, 'wish must be created via Models.makeWish()');
+
+  const qBtn = doc.getElementById('qualityBtn');
+  qBtn.click();
+  assert.equal(getQualityState(), 'balanced');
+  assert.equal(qBtn.textContent, 'Quality: Balanced');
+  qBtn.click();
+  assert.equal(getQualityState(), 'high');
+  assert.equal(qBtn.textContent, 'Quality: High');
+});
+
+test('pooled particle system uses 320 particles and 80 bubbles with zero runtime scene.add or Material allocations', () => {
+  const { dbg, scene, rafQueue } = loadGameHarness({ hash: '#test' });
+  const instanced = scene.children.filter(c => c.count === 320 || c.count === 80);
+  assert.equal(instanced.length, 2, 'should add exactly two InstancedMeshes (320 particles + 80 bubbles)');
+
+  const pMesh = instanced.find(c => c.count === 320);
+  const bMesh = instanced.find(c => c.count === 80);
+  pMesh.instanceMatrix.needsUpdate = false;
+  if (pMesh.instanceColor) pMesh.instanceColor.needsUpdate = false;
+  bMesh.instanceMatrix.needsUpdate = false;
+  if (bMesh.instanceColor) bMesh.instanceColor.needsUpdate = false;
+
+  // Idle frame with zero active particles should not flag dirty buffers
+  rafQueue[0](1016);
+  assert.equal(pMesh.instanceMatrix.needsUpdate, false, 'idle frame should not upload particle matrix');
+  assert.equal(bMesh.instanceMatrix.needsUpdate, false, 'idle frame should not upload bubble matrix');
+
+  const addsBefore = scene.addCalls;
+  dbg.burst(dbg.P.x, dbg.P.y + 1, dbg.P.z, 0xffd93b, 12, false);
+  dbg.dustBurst(dbg.P.x, dbg.P.y, dbg.P.z, 5, 'sand');
+  dbg.splashBurst(dbg.P.x, 0, dbg.P.z, 6);
+  dbg.burst(dbg.P.x, dbg.P.y + 1, dbg.P.z, 0xff8fb0, 4, true);
+  assert.equal(scene.addCalls, addsBefore, 'burst/dustBurst/splashBurst must not call scene.add()');
+
+  rafQueue[rafQueue.length - 1](1032);
+  assert.equal(pMesh.instanceMatrix.needsUpdate, true, 'active particles should upload instanceMatrix');
+  assert.equal(bMesh.instanceMatrix.needsUpdate, true, 'active bubbles should upload instanceMatrix');
+});
+
+test('Gloomblob combat applies knockback impulse, spawns bouncing star drops, and respects roll invulnT', () => {
+  const { dbg, rafQueue, doc } = loadGameHarness({ hash: '#test' });
+  dbg.spawnGloom();
+  assert.ok(dbg.glooms.length >= 1, 'should spawn gloom');
+  const g = dbg.glooms[0];
+  g.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 5);
+  dbg.P.facing = 0;
+
+  // First hit applies knockback impulse & recoil flash (3 HP -> 2 HP)
+  dbg.Physics.toggleLockOn();
+  dbg.shoot();
+  for (let i = 0; i < 12; i++) rafQueue[rafQueue.length - 1](1050 + i * 20);
+  assert.equal(g.hp, 2, 'first Star Bolt hit reduces 3 HP gloom to 2');
+  assert.ok(Math.hypot(g.kx, g.kz) > 0.5 || g.ky > 0, 'hitGloom should apply knockback impulse');
+
+  // Second and third hits defeat gloom and spawn bouncing star pickups
+  for (let shot = 0; shot < 2; shot++) {
+    rafQueue[rafQueue.length - 1](1350 + shot * 450);
+    rafQueue[rafQueue.length - 1](1400 + shot * 450);
+    g.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 5);
+    dbg.shoot();
+    for (let i = 0; i < 14; i++) rafQueue[rafQueue.length - 1](1425 + shot * 450 + i * 20);
+  }
+  const pickupsBefore = 0;
+  for (let i = 0; i < 12; i++) rafQueue[rafQueue.length - 1](2300 + i * 25);
+  assert.equal(dbg.glooms.includes(g), false, '3 Star Bolt hits should defeat 3 HP gloom');
+  assert.ok(dbg.pickups.length >= pickupsBefore + 2, 'defeating gloom should spawn 2-3 star pickups');
+  const dropped = dbg.pickups.filter(p => p.userData.kind === 'star');
+  assert.ok(dropped.some(p => p.userData.bouncing === true || p.userData.bounces >= 1), 'dropped stars should bounce');
+  dbg.Physics.clearLockOn();
+
+  // Collect a dropped star so Starkeeper carries >= 1 star
+  const starPickup = dropped[0];
+  starPickup.userData.bouncing = false;
+  starPickup.userData.baseY = dbg.P.y + 0.8;
+  starPickup.position.set(dbg.P.x, dbg.P.y + 0.8, dbg.P.z);
+  rafQueue[rafQueue.length - 1](2050);
+  assert.ok(Number(doc.getElementById('starCount').textContent) >= 1, 'player should collect dropped star');
+
+  // Dodge-roll invulnerability prevents star theft even right on top of gloom
+  dbg.spawnGloom();
+  const g2 = dbg.glooms[dbg.glooms.length - 1];
+  g2.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 0.5);
+  dbg.P.invulnT = 0.35;
+  const starsBeforeInvuln = Number(doc.getElementById('starCount').textContent);
+  rafQueue[rafQueue.length - 1](2100);
+  assert.equal(g2.stolen, false, 'invulnT > 0 should block gloom star theft');
+  assert.equal(Number(doc.getElementById('starCount').textContent), starsBeforeInvuln, 'star count unchanged during roll invuln');
+});
+
+test('Z-target updates HUD reticle + letterbox, sends Wish overhead, and Totem manages collider', () => {
+  const { dbg, rafQueue, doc, getTotemCol } = loadGameHarness({ hash: '#test' });
+  const totem = dbg.getTotem();
+  assert.ok(totem, 'beginGame should spawn totem');
+  assert.ok(getTotemCol() && Math.abs(getTotemCol().r - 1.15) < 0.01, 'totem should register 1.15 collider');
+
+  dbg.spawnGloom();
+  const g = dbg.glooms[0];
+  g.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 6);
+  dbg.Physics.toggleLockOn();
+  assert.ok(dbg.Physics.lockTarget, 'lockTarget should engage');
+
+  for (let i = 0; i < 25; i++) rafQueue[rafQueue.length - 1](1050 + i * 30);
+  assert.equal(doc.body.classList.contains('z-active'), true, 'body should have z-active class when locked');
+  assert.equal(doc.getElementById('lockReticle').style.opacity, '1', 'lock reticle should be visible');
+  assert.ok(doc.getElementById('lockReticle').style.transform.includes('translate3d'), 'reticle uses translate3d');
+  assert.ok(dbg.wish.mesh.position.y > g.mesh.position.y + 1.2, 'Wish should arc above locked target');
+
+  dbg.lightTotem();
+  assert.equal(getTotemCol(), null, 'lightTotem should clear totem collider');
+});
+
+test('wild critters and followers resolve solid prop colliders and hot loops avoid Vector3 allocations', () => {
+  const { dbg, rafQueue, setColliders } = loadGameHarness({ hash: '#test' });
+  const gameSrc = fs.readFileSync(new URL('../game.js', import.meta.url), 'utf8');
+  const hotLoopStart = gameSrc.indexOf('function updateWish');
+  assert.ok(hotLoopStart >= 0, 'updateWish must exist');
+  const hotSection = gameSrc.slice(hotLoopStart);
+  assert.ok(!hotSection.includes('new THREE.Vector3'), 'hot update functions must not allocate new THREE.Vector3');
+
+  // Place a rock collider and ensure follower is pushed outside it (no hollow guard)
+  setColliders([{ x: dbg.P.x + 2.0, z: dbg.P.z, r: 0.9 }]);
+  dbg.spawnCocoon();
+  assert.ok(dbg.cocoons.length >= 1, 'spawnCocoon should create a cocoon');
+  const cc = dbg.cocoons[0];
+  cc.mesh.position.set(dbg.P.x, 2, dbg.P.z + 2.2);
+  dbg.P.facing = 0;
+  dbg.meleeAttack();
+  assert.ok(dbg.followers.length > 0, 'popping cocoon must deterministically create a follower');
+  const f = dbg.followers[0];
+  f.mesh.position.set(dbg.P.x + 2.1, 2, dbg.P.z + 0.05);
+  rafQueue[rafQueue.length - 1](1500);
+  rafQueue[rafQueue.length - 1](1550);
+  const distToRock = Math.hypot(f.mesh.position.x - (dbg.P.x + 2.0), f.mesh.position.z - dbg.P.z);
+  // Small critters (beetle/kiwi) use colRadius 0.34 + rock radius 0.90 = 1.24 push-out
+  assert.ok(distToRock >= 1.22, `follower should be pushed outside rock collider, got dist=${distToRock}`);
+
+  // Verify wild critter resolves solid prop collider during movement
+  for (let i = 0; i < 4; i++) rafQueue[rafQueue.length - 1](1550 + i * 30);
+  assert.ok(dbg.wild.length > 0, 'wild critters should spawn during update');
+  const w = dbg.wild[0];
+  w.state = 'wander';
+  w.turnT = 5;
+  w.dir = 0;
+  const wx = dbg.P.x + 12.0;
+  const wz = dbg.P.z + 12.0;
+  setColliders([{ x: wx, z: wz, r: 0.9 }]);
+  w.mesh.position.set(wx, 2, wz - 0.15);
+  rafQueue[rafQueue.length - 1](1700);
+  const wildDist = Math.hypot(w.mesh.position.x - wx, w.mesh.position.z - wz);
+  assert.ok(wildDist >= 1.22, `wild critter should be pushed outside rock collider, got dist=${wildDist}`);
+});
+
+test('lightTotem enforces cooldown without double-spawning and stops spawning at 8/8 lit', () => {
+  const { dbg, scene, rafQueue } = loadGameHarness({ hash: '#test' });
+  const countTotemsInScene = () =>
+    scene.children.filter(c => c.userData && c.userData.crystal && c.userData.ringA).length;
+
+  assert.equal(countTotemsInScene(), 1, 'initial scene should have exactly 1 totem');
+
+  // Light totems 1..7 and verify immediate frames respect cooldown and never leave >1 totem in scene
+  for (let n = 1; n < 8; n++) {
+    dbg.lightTotem();
+    assert.equal(dbg.getTotem() === null, true, `totem should be null during cooldown after lighting #${n}`);
+    assert.equal(countTotemsInScene(), 0, 'no orphaned totem should remain in scene');
+    // Step 2 frames (<0.25s) -> still in cooldown
+    rafQueue[rafQueue.length - 1](1000 + n * 500 + 30);
+    assert.equal(dbg.getTotem() === null, true, 'totem should wait for 0.25s cooldown before respawning');
+    // Step past 0.25s -> exactly 1 new totem spawns
+    for (let k = 1; k <= 8; k++) rafQueue[rafQueue.length - 1](1000 + n * 500 + 30 + k * 40);
+    assert.equal(dbg.getTotem() !== null, true, `totem #${n + 1} should respawn after cooldown`);
+    assert.equal(countTotemsInScene(), 1, `scene must contain exactly 1 totem (not 2) on #${n + 1}`);
+  }
+
+  // Light 8th totem -> 8/8 complete, totem must NOT respawn even after many frames
+  dbg.lightTotem();
+  assert.equal(dbg.getTotem() === null, true);
+  for (let k = 1; k <= 20; k++) rafQueue[rafQueue.length - 1](6000 + k * 40);
+  assert.equal(dbg.getTotem() === null, true, 'totem must not respawn once lit >= 8');
+  assert.equal(countTotemsInScene(), 0, 'scene must have 0 totems at 8/8');
+});
+
+test('magnetized uphill stars never stall above player head and Controls HUD panel toggles cleanly', () => {
+  const { dbg, doc, rafQueue } = loadGameHarness({ hash: '#test' });
+
+  // Place a fallen star 2.4 units ABOVE the player (simulating uphill spawn while player stepped downhill)
+  const star = dbg.Models.makeStarPickup();
+  star.position.set(dbg.P.x + 1.2, dbg.P.y + 3.2, dbg.P.z);
+  star.userData = { kind: 'star', baseY: dbg.P.y + 3.2, bouncing: false, vx: 0, vy: 0, vz: 0, bounces: 0, age: 1 };
+  dbg.scene.add(star);
+  dbg.pickups.push(star);
+
+  const starsBefore = Number(doc.getElementById('starCount').textContent);
+  for (let k = 1; k <= 30; k++) rafQueue[rafQueue.length - 1](1000 + k * 30);
+  assert.equal(dbg.pickups.includes(star), false, 'uphill magnetized star must zip cleanly into player and collect (never stall overhead)');
+  assert.ok(Number(doc.getElementById('starCount').textContent) >= starsBefore + 1, 'star count should increment');
+
+  // Toggle Controls reminder panel via button click
+  const cBtn = doc.getElementById('controlsBtn');
+  const panel = doc.getElementById('controlsPanel');
+  assert.equal(panel.classList.contains('open'), false, 'controlsPanel starts closed');
+  cBtn.click();
+  assert.equal(panel.classList.contains('open'), true, 'clicking Controls button opens controlsPanel');
+  cBtn.click();
+  assert.equal(panel.classList.contains('open'), false, 'clicking Controls button again closes controlsPanel');
+});
+
+test('melee combos, player health/respawn, and mortal fighting companions work end-to-end', () => {
+  const { dbg, doc, rafQueue } = loadGameHarness({ hash: '#test' });
+
+  // 1. Player starts at 12 half-hearts (6 full hearts); Gloomblobs start at 3 HP
+  assert.equal(dbg.P.hp, 12, 'player starts with 12 half-hearts (6 hearts)');
+  dbg.spawnGloom();
+  const g = dbg.glooms[0];
+  assert.equal(g.hp, 3, 'gloomblobs should have 3 HP for combo combat');
+  g.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.1);
+  dbg.P.facing = 0;
+
+  // Melee combo hit reduces gloom HP
+  assert.equal(typeof dbg.meleeAttack, 'function', 'debug handle should expose meleeAttack');
+  dbg.meleeAttack();
+  assert.equal(g.hp, 2, 'first melee hit deals 1 dmg to gloomblob');
+
+  // 2. Companions actively defend player (attack gloom, NEVER dig random stars) and can take damage & die
+  dbg.spawnCocoon();
+  const cc = dbg.cocoons[0];
+  cc.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.0);
+  dbg.P.facing = 0;
+  for (let k = 0; k < 10; k++) rafQueue[rafQueue.length - 1](1050 + k * 40);
+  dbg.meleeAttack(); // pop cocoon via melee!
+  assert.ok(dbg.followers.length >= 1, 'melee attack pops cocoon and adds companion');
+  const ally = dbg.followers[0];
+  assert.ok(ally.stats && ally.hp === ally.maxHp && ally.maxHp >= 3 && ally.maxHp <= 7,
+    `companion starts at full species-balanced HP (3-7), got ${ally.hp}/${ally.maxHp}`);
+  assert.equal(ally.findT, undefined, 'companions must NOT have random star-digging findT timer');
+  assert.ok(typeof ally.displayName === 'string' && ally.displayName.includes(' the '), `companion should have unique individual displayName, got ${ally.displayName}`);
+
+  // Position ally right next to gloom -> ally damages gloom
+  g.mesh.position.set(dbg.P.x + 2.0, dbg.P.y, dbg.P.z + 2.0);
+  ally.mesh.position.set(dbg.P.x + 1.5, dbg.P.y, dbg.P.z + 2.0);
+  ally.atkCooldown = 0;
+  const gHpBefore = g.hp;
+  for (let k = 0; k < 15; k++) rafQueue[rafQueue.length - 1](1600 + k * 40);
+  assert.ok(g.hp < gHpBefore || !dbg.glooms.includes(g), 'fighting companion should damage nearby gloom');
+
+  // Companion takes mitigated damage and dies at 0 HP, updating Friends count
+  assert.equal(typeof dbg.damageCompanion, 'function', 'debug handle should expose damageCompanion');
+  dbg.damageCompanion(ally, ally.maxHp * 3);
+  assert.equal(dbg.followers.includes(ally), false, 'companion at 0 HP must die and leave parade');
+  assert.equal(Number(doc.getElementById('friendCount').textContent), dbg.followers.length);
+
+  // 3. Player damage -> death at 0 HP -> respawn with full 12 HP & surviving friends regrouped
+  dbg.spawnCocoon();
+  dbg.cocoons[dbg.cocoons.length - 1].mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 1.8);
+  dbg.P.facing = 0;
+  for (let k = 0; k < 12; k++) rafQueue[rafQueue.length - 1](2400 + k * 40);
+  dbg.meleeAttack();
+  assert.ok(dbg.followers.length >= 1, 'have a surviving friend before death');
+  dbg.followers[0].mesh.position.set(dbg.P.x + 40, dbg.P.y, dbg.P.z + 40);
+
+  dbg.damagePlayer(12, 'test');
+  assert.equal(dbg.P.dead, true, 'reaching 0 HP triggers dead state');
+  assert.equal(doc.getElementById('deathOverlay').classList.contains('show'), true, 'death overlay appears');
+  // Advance past 2.0s respawn timer
+  for (let k = 0; k < 60; k++) rafQueue[rafQueue.length - 1](3000 + k * 45);
+  assert.equal(dbg.P.dead, false, 'player should respawn after 2.0s');
+  assert.equal(dbg.P.hp, 12, 'respawn restores full 12 HP');
+  const distFriend = Math.hypot(dbg.followers[0].mesh.position.x - dbg.P.x, dbg.followers[0].mesh.position.z - dbg.P.z);
+  assert.ok(distFriend < 8, `surviving friend must rejoin player on respawn, dist=${distFriend}`);
+});
+
+test('3-step Star-Shot sequence and Melee<->Shot hybrid combos fire distinct projectiles and pierce/explode', () => {
+  const { dbg, rafQueue } = loadGameHarness({ hash: '#test' });
+  dbg.P.onGround = true;
+  dbg.P.facing = 0;
+  let now = 5000;
+  const tick = (n, step = 40) => {
+    for (let k = 0; k < n; k++) {
+      now += step;
+      rafQueue[rafQueue.length - 1](now);
+    }
+  };
+  const clearBolts = () => {
+    while (dbg.bolts.length) {
+      const b = dbg.bolts.pop();
+      dbg.scene.remove(b.mesh);
+    }
+  };
+
+  // 1. F -> F -> F sequential Star-Shot combo: 1 bolt -> 2 twin bolts -> 1 exploding Star-Orb
+  clearBolts();
+  assert.equal(dbg.shoot(), 1);
+  assert.equal(dbg.bolts.length, 1, 'F step 1 spawns 1 star bolt');
+  tick(8, 35); // past 0.22s cooldown, well inside 0.80s chain window
+  clearBolts();
+  assert.equal(dbg.shoot(), 2);
+  assert.equal(dbg.bolts.length, 2, 'F -> F step 2 spawns 2 Twin Starlight Bolts');
+  tick(8, 35);
+  clearBolts();
+  assert.equal(dbg.shoot(), 3);
+  assert.equal(dbg.bolts.length, 1, 'F -> F -> F step 3 spawns 1 Grand Star-Orb');
+  assert.ok(dbg.bolts[0].explodeRadius >= 3.0 && dbg.bolts[0].dmg === 2, 'Grand Star-Orb deals 2 heavy AoE dmg');
+
+  // 2. Click -> F => 3-Bolt Star-Fan Scatter
+  tick(14, 35);
+  clearBolts();
+  dbg.P.meleeT = 0; dbg.P.meleeStep = 0; dbg.P.comboWindowT = 0;
+  dbg.meleeAttack();
+  assert.equal(dbg.shoot(), 'fan');
+  assert.equal(dbg.bolts.length, 3, 'Click -> F spawns 3-bolt Star-Fan Scatter');
+
+  // 3. Click -> Click -> F => Piercing Comet Lance (pierces straight through two lined-up glooms!)
+  tick(12, 35);
+  clearBolts();
+  dbg.P.meleeT = 0; dbg.P.meleeStep = 0; dbg.P.comboWindowT = 0;
+  dbg.meleeAttack();
+  dbg.P.meleeT = 0;
+  dbg.meleeAttack();
+  assert.equal(dbg.shoot(), 'comet');
+  assert.equal(dbg.bolts.length, 1);
+  assert.equal(dbg.bolts[0].pierce, true, 'Piercing Comet must have pierce=true');
+  assert.equal(dbg.bolts[0].dmg, 2, 'Piercing Comet deals 2 heavy dmg');
+
+  // 4. Click x3 -> F => 6-Bolt 360° Constellation Nova
+  tick(14, 35);
+  clearBolts();
+  dbg.P.meleeT = 0; dbg.P.meleeStep = 2; dbg.P.comboWindowT = 0.5;
+  dbg.meleeAttack(); // Hit 3 Spin
+  assert.equal(dbg.shoot(), 'nova');
+  assert.equal(dbg.bolts.length, 6, 'Click x3 -> F spawns 6-bolt 360° Constellation Nova');
+});
+
+test('pooled sand & snow footprints use zero runtime scene.add, persist on dry ground, and wash away under shoreline waves', () => {
+  const { dbg, sandbox, scene, rafQueue } = loadGameHarness({ hash: '#test' });
+  let waveY = -0.2;
+  sandbox.Shaders.waterHeightAt = () => waveY;
+  sandbox.heightAt = (x) => (x < 0 ? 0.12 : 2.5);
+
+  assert.ok(dbg.footprintPool && dbg.footprintPool.capacity === 240, 'footprint pool should pre-allocate 240 slots');
+  assert.equal(typeof dbg.stampFootprint, 'function');
+
+  const addsBefore = scene.addCalls;
+  // Stamp 1 shoreline wet-sand print (x=-5, y=0.12), 1 high dry-sand print (x=5, y=2.5), and 1 snow print (x=10, y=2.5)
+  assert.equal(dbg.stampFootprint(-5, 0.12, 0, 0.4, 'sand', -1, 1.0), true);
+  assert.equal(dbg.stampFootprint(5, 2.5, 0, 0.4, 'sand', 1, 1.0), true);
+  assert.equal(dbg.stampFootprint(10, 2.5, 0, 0.4, 'snow', -1, 1.0), true);
+  assert.equal(dbg.stampFootprint(12, 2.5, 0, 0.4, 'grass', 1, 1.0), false, 'grass should not stamp footprints');
+  assert.equal(scene.addCalls, addsBefore, 'stampFootprint must NEVER call scene.add() at runtime');
+
+  const activeSlots = () => dbg.footprintPool.slots.filter(s => s.active);
+  assert.equal(activeSlots().length, 3, 'should have 3 active footprints');
+
+  // With tide low (waveY = -0.2 < 0.12 - 0.14), all 3 prints stay intact after 0.5s
+  let now = 2000;
+  for (let i = 0; i < 12; i++) {
+    now += 40;
+    rafQueue[rafQueue.length - 1](now);
+  }
+  assert.equal(activeSlots().length, 3, 'all 3 footprints should persist when wave stays below shoreline print');
+
+  // Shoreline wave rolls in (waveY = 0.25 >= 0.12 - 0.14) -> washes away the shoreline sand print cleanly!
+  waveY = 0.25;
+  for (let i = 0; i < 25; i++) {
+    now += 40;
+    rafQueue[rafQueue.length - 1](now);
+  }
+  const remaining = activeSlots();
+  assert.equal(remaining.length, 2, 'shoreline wave must wash away the low sand footprint');
+  assert.ok(remaining.every(s => s.x > 0), 'only high dry-sand and snow footprints should remain after wave washes shoreline');
+});
+
+test('updateGrassTramplers feeds nearby companions, wild critters, and gloomblobs into uTramplers', () => {
+  const { dbg, sandbox, rafQueue } = loadGameHarness({ hash: '#test' });
+  dbg.spawnGloom();
+  const g = dbg.glooms[0];
+  g.mesh.position.set(dbg.P.x + 3.5, dbg.P.y, dbg.P.z + 2.0);
+
+  dbg.spawnCocoon();
+  const cc = dbg.cocoons[0];
+  cc.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.0);
+  dbg.P.facing = 0;
+  dbg.meleeAttack(); // pop cocoon -> spawns a follower
+  assert.ok(dbg.followers.length >= 1);
+  const f = dbg.followers[0];
+  f.mesh.position.set(dbg.P.x - 2.5, dbg.P.y, dbg.P.z + 1.5);
+
+  // Step past melee hit-stop freeze frame onto a full simulation frame
+  rafQueue[rafQueue.length - 1](1500);
+  rafQueue[rafQueue.length - 1](1540);
+  const active = sandbox.Shaders.tramplers.filter(t => t.w > 0);
+  assert.ok(active.length >= 2, `Expected follower + gloomblob + wish/wild in uTramplers, got ${active.length}`);
+  assert.ok(
+    active.some(t => Math.hypot(t.x - g.mesh.position.x, t.z - g.mesh.position.z) < 0.8 && t.w >= 1.5),
+    'Nearby Gloomblob must appear in grass trampler uniforms'
+  );
+  assert.ok(
+    active.some(t => Math.hypot(t.x - f.mesh.position.x, t.z - f.mesh.position.z) < 0.8 && t.w >= 0.9),
+    'Nearby companion must appear in grass trampler uniforms'
+  );
+  // Unused trailing slots must be cleared to w = 0
+  for (let i = active.length; i < 16; i++) {
+    assert.equal(sandbox.Shaders.tramplers[i].w, 0, `Unused trampler slot ${i} must have radius 0`);
+  }
+});
+
+test('Region transitions, Tidecaller Pearl relic claiming, Secret Star Shrines, and guided Sunken City Totem work end-to-end', () => {
+  const { dbg, sandbox, doc, rafQueue } = loadGameHarness({ hash: '#test' });
+  let now = 2000;
+  const tick = (n = 2, step = 40) => {
+    for (let i = 0; i < n; i++) {
+      now += step;
+      rafQueue[rafQueue.length - 1](now);
+    }
+  };
+
+  // 1. Starts in Star Sanctuary with 16 aquatic critters patrolling the Sunken City reef
+  assert.equal(dbg.getCurrentRegion().id, 'sanctuary');
+  assert.equal(dbg.aquaticCritters.length, 16, 'Should spawn 16 aquatic critters in the Sunken Underwater City');
+
+  // 2. Stepping into Whispering Deep Forest triggers region banner & updates HUD pill
+  dbg.P.x = 62;
+  dbg.P.z = -78;
+  tick(2);
+  assert.equal(dbg.getCurrentRegion().id, 'whisperingForest');
+  assert.equal(doc.getElementById('regionPill').textContent, 'Whispering Deep Forest');
+  assert.equal(doc.getElementById('regionBanner').classList.contains('show'), true);
+
+  // 3. Walking up to Tidecaller's Pearl pedestal claims breathing relic & shows aqua HUD badge
+  const ro = dbg.worldLandmarks.relicObj;
+  assert.equal(dbg.P.hasBreathRelic, false);
+  dbg.P.x = ro.x;
+  dbg.P.y = ro.y;
+  dbg.P.z = ro.z;
+  tick(2);
+  assert.equal(dbg.P.hasBreathRelic, true, 'Approaching Tidecaller Pearl pedestal must claim breathing relic');
+  assert.equal(ro.claimed, true);
+  assert.equal(ro.pearlMesh.visible, false);
+  assert.equal(doc.getElementById('relicBadge').style.display, 'inline-block');
+
+  // 4. Discovering an off-path Secret Star Shrine grants +5 Stars, full HP, and increments Secrets 1/6
+  const sec0 = dbg.worldLandmarks.secretObjs[0];
+  dbg.P.hp = 6;
+  const starsBefore = Number(doc.getElementById('starCount').textContent);
+  dbg.P.x = sec0.x;
+  dbg.P.y = sec0.y;
+  dbg.P.z = sec0.z;
+  tick(2);
+  assert.equal(sec0.discovered, true, 'Approaching Secret Star Shrine must mark it discovered');
+  assert.equal(dbg.getSecretsFound(), 1);
+  assert.equal(Number(doc.getElementById('secretCount').textContent), 1);
+  assert.equal(dbg.P.hp, dbg.P.maxHp, 'Secret Shrine discovery must restore full hearts');
+  assert.ok(Number(doc.getElementById('starCount').textContent) >= starsBefore + 5, 'Secret Shrine must award +5 stars');
+
+  // 5. Guided 8-Totem route places Totem #5 underwater at the Sunken Star-Temple!
+  for (let k = 0; k < 4; k++) {
+    dbg.lightTotem();
+    tick(10, 40);
+  }
+  const t5 = dbg.getTotem();
+  assert.ok(t5 && t5.underwater === true, 'Totem #5 must spawn underwater in the Sunken Underwater City');
+  assert.equal(t5.x, dbg.Regions.TOTEM_ROUTE[4].x);
+  assert.equal(t5.z, dbg.Regions.TOTEM_ROUTE[4].z);
+});
+
+test('hearts are only absorbed when needed, heal injured companions when player is full, companions leave sand/snow footprints, and region switches music', () => {
+  const { dbg, sandbox, rafQueue } = loadGameHarness({ hash: '#test' });
+  let now = 3000;
+  const tick = (n = 2, step = 40) => {
+    for (let i = 0; i < n; i++) {
+      now += step;
+      rafQueue[rafQueue.length - 1](now);
+    }
+  };
+
+  // 1. Spawn a heart right on top of full-health Starkeeper -> must NOT be wasted!
+  dbg.P.hp = dbg.P.maxHp;
+  const heart = dbg.Models.makeHeartPickup();
+  heart.position.set(dbg.P.x, dbg.P.y + 0.8, dbg.P.z);
+  heart.userData = { kind: 'heart', baseY: dbg.P.y + 0.8, bouncing: false, vx: 0, vy: 0, vz: 0, bounces: 0, age: 1 };
+  dbg.scene.add(heart);
+  dbg.pickups.push(heart);
+  tick(4);
+  assert.equal(dbg.pickups.includes(heart), true, 'Full-health Starkeeper must NOT absorb/waste a dropped heart');
+
+  // 2. Spawn an injured companion -> companion attracts & absorbs the spare heart to heal!
+  dbg.spawnCocoon();
+  const cc = dbg.cocoons[dbg.cocoons.length - 1];
+  cc.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.0);
+  dbg.P.facing = 0;
+  dbg.meleeAttack();
+  tick(3);
+  assert.ok(dbg.followers.length >= 1, 'Should have a companion');
+  const ally = dbg.followers[0];
+  ally.hp = 1; // injured!
+  ally.mesh.position.set(dbg.P.x + 0.5, dbg.P.y, dbg.P.z);
+  heart.position.set(dbg.P.x + 0.5, dbg.P.y + 0.6, dbg.P.z);
+  tick(3);
+  assert.equal(dbg.pickups.includes(heart), false, 'Injured companion should absorb spare heart when Starkeeper is full');
+  assert.equal(ally.hp, Math.min(ally.maxHp, 3), 'Absorbing spare heart should restore +2 companion health (clamped to maxHp)');
+
+  // 3. When Starkeeper IS hurt, Starkeeper absorbs a heart and heals!
+  dbg.P.hp = 8;
+  const heart2 = dbg.Models.makeHeartPickup();
+  heart2.position.set(dbg.P.x, dbg.P.y + 0.8, dbg.P.z);
+  heart2.userData = { kind: 'heart', baseY: dbg.P.y + 0.8, bouncing: false, vx: 0, vy: 0, vz: 0, bounces: 0, age: 1 };
+  dbg.scene.add(heart2);
+  dbg.pickups.push(heart2);
+  tick(3);
+  assert.equal(dbg.pickups.includes(heart2), false, 'Hurt Starkeeper should absorb heart');
+  assert.equal(dbg.P.hp, 10, 'Heart should heal Starkeeper by +2 half-hearts');
+
+  // 4. Companions walking on snow/sand leave crisp distance-synced footprints (all grounded body plans!)
+  sandbox.surfaceAt = () => 'snow';
+  const printsBefore = dbg.footprintPool.slots.filter(s => s.active).length;
+  ally.mesh.position.set(dbg.P.x + 4.5, dbg.P.y, dbg.P.z + 4.5);
+  tick(14, 35);
+  const printsAfter = dbg.footprintPool.slots.filter(s => s.active).length;
+  assert.ok(printsAfter > printsBefore, `Moving companion on snow must stamp footprints (${printsBefore} -> ${printsAfter})`);
+
+  // 5. Crossing into Canyon Oasis switches Sound active region soundtrack to canyonOasis!
+  dbg.P.x = -86;
+  dbg.P.z = -14;
+  tick(2);
+  assert.equal(dbg.Sound.getRegion(), 'canyonOasis', 'Entering Canyon Oasis must switch generative soundtrack region');
+
+  // 6. Firing a Star Bolt while facing AWAY from camera aim immediately turns Starkeeper toward shot AND spawns bolt at Staff-Lantern tip ahead!
+  dbg.Physics.clearLockOn();
+  dbg.P.meleeT = 0;
+  dbg.P.comboWindowT = 0;
+  dbg.P.x = 0;
+  dbg.P.z = 0;
+  dbg.P.y = dbg.heightAt(0, 0);
+  dbg.P.facing = Math.PI; // facing -Z (away from camera look direction)
+  dbg.player.rotation.y = Math.PI;
+  dbg.camera.position.set(0, dbg.P.y + 3, -10);
+  dbg.camera.lookAt(0, dbg.P.y + 2, 20);
+  const boltsBefore = dbg.bolts.length;
+  const shotRes = dbg.shoot();
+  assert.ok(shotRes, 'shoot() should fire a Star Bolt');
+  assert.equal(dbg.bolts.length, boltsBefore + 1, 'shoot() must spawn a bolt');
+  const firedBolt = dbg.bolts[dbg.bolts.length - 1];
+  assert.ok(Math.abs(dbg.Physics.wrapAngle(dbg.P.facing - 0)) < 0.25, `shoot() must turn P.facing toward +Z aim, got ${dbg.P.facing}`);
+  assert.ok(Math.abs(dbg.Physics.wrapAngle(dbg.player.rotation.y - 0)) < 0.25, `shoot() must orient player mesh toward +Z aim on frame 0, got ${dbg.player.rotation.y}`);
+  assert.ok(firedBolt.mesh.position.z > dbg.P.z + 0.85, `Star Bolt must launch ahead of Starkeeper from Staff-Lantern tip, got dz=${(firedBolt.mesh.position.z - dbg.P.z).toFixed(2)}`);
+  assert.ok(firedBolt.mesh.position.y > dbg.P.y + 1.32, `Star Bolt must launch at raised Staff-Lantern tip height, got dy=${(firedBolt.mesh.position.y - dbg.P.y).toFixed(2)}`);
+
+  // 7. CharacterRig attaches cleanly on debugHandle & live GLB staff-tip world pos drives shoot() muzzle!
+  assert.ok(dbg.CharacterRig && typeof dbg.CharacterRig.attachToPlayer === 'function', 'debugHandle must expose CharacterRig');
+  assert.ok(dbg.player.userData.glbRig, 'player must have glbRig controller attached');
+  let rigUpdated = false;
+  let smileCalled = false;
+  const origGlbRig = dbg.player.userData.glbRig;
+  dbg.player.userData.glbRig = {
+    ready: true,
+    update() { rigUpdated = true; },
+    getStaffTipWorldPos(out) { return out.set(dbg.P.x + 0.45, dbg.P.y + 1.92, dbg.P.z + 1.55); },
+    triggerEmote(name) { if (name === 'smile') smileCalled = true; },
+  };
+  tick(6, 50);
+  assert.equal(rigUpdated, true, 'physics.js must delegate player animation to ready glbRig.update()');
+  const shot2 = dbg.shoot();
+  assert.ok(shot2, 'shoot() should fire with ready glbRig');
+  const liveBolt = dbg.bolts[dbg.bolts.length - 1];
+  assert.ok(Math.abs(liveBolt.mesh.position.y - (dbg.P.y + 1.92)) < 0.15, `GLB ready shoot() must launch bolt from live staff tip y=${dbg.P.y + 1.92}, got ${liveBolt.mesh.position.y}`);
+  assert.ok(Math.abs(liveBolt.mesh.position.z - (dbg.P.z + 1.55)) < 0.25, `GLB ready shoot() must launch bolt from live staff tip z=${dbg.P.z + 1.55}, got ${liveBolt.mesh.position.z}`);
+  dbg.lightTotem();
+  assert.equal(smileCalled, true, 'Lighting a Star Totem must trigger Starkeeper smile facial emote');
+  dbg.player.userData.glbRig = origGlbRig;
+});
+
+test('Companions actively defend themselves when attacked even far away from Starkeeper (not just when Starkeeper is near)', () => {
+  const { dbg, rafQueue } = loadGameHarness({ hash: '#test' });
+  let now = 2000;
+  const tick = (n = 1, step = 40) => {
+    for (let i = 0; i < n; i++) {
+      now += step;
+      rafQueue[rafQueue.length - 1](now);
+    }
+  };
+
+  // Start cleanly with 1 companion far away (24u) from Starkeeper (outside the 14u player-escort radius!)
+  dbg.glooms.length = 0;
+  dbg.cocoons.length = 0;
+  dbg.followers.length = 0;
+  dbg.P.x = 0;
+  dbg.P.z = 0;
+  dbg.P.y = dbg.heightAt(0, 0);
+
+  // Free a companion via cocoon crack
+  dbg.spawnCocoon();
+  const cc = dbg.cocoons[0];
+  cc.mesh.position.set(0, dbg.P.y, 1.8);
+  dbg.P.facing = 0;
+  dbg.meleeAttack();
+  tick(3);
+  assert.ok(dbg.followers.length >= 1, 'Should have freed a companion');
+
+  const ally = dbg.followers[0];
+  ally.mesh.position.set(24, dbg.heightAt(24, 0), 0);
+  ally.atkCooldown = 0;
+  ally.hp = 3;
+
+  // Spawn a Gloomblob directly attacking this distant companion (24u from Starkeeper!)
+  dbg.spawnGloom();
+  const g = dbg.glooms[0];
+  g.mesh.position.set(25.4, dbg.heightAt(25.4, 0), 0);
+  g.hp = 3;
+  g.state = 'lunge';
+  g.targetAlly = ally;
+  const gloomHpBefore = g.hp;
+
+  // Gloom lands a hit on the companion -> companion MUST record attacker and immediately fight back!
+  dbg.damageCompanion(ally, 1, -3, 0, g);
+  assert.equal(ally.attacker, g, 'damageCompanion must record attacking gloom for self-defense');
+  tick(18, 40);
+  assert.ok(g.hp < gloomHpBefore || !dbg.glooms.includes(g),
+    `Attacked companion 24u away from Starkeeper must fight back and damage gloom (hp ${gloomHpBefore} -> ${g.hp})`);
+});
+
+test('Live pooled 3D staff ribbon trail activates per combo step with zero runtime scene.add allocations', () => {
+  const { dbg } = loadGameHarness({ hash: '#test' });
+  dbg.glooms.length = 0;
+  dbg.cocoons.length = 0;
+
+  assert.ok(dbg.staffTrail, 'window.__GAME_DEBUG__.staffTrail must be exposed');
+  assert.equal(dbg.staffTrail.active, false);
+
+  const addsBefore = dbg.scene.addCalls;
+  assert.equal(dbg.meleeAttack(), true);
+  assert.equal(dbg.staffTrail.active, true, 'Hit 1 must activate live pooled staff ribbon trail');
+  assert.equal(dbg.staffTrail.colorHex, 0x5ef8e8, 'Hit 1 trail must use crisp celestial sea-teal');
+  assert.equal(dbg.scene.addCalls, addsBefore, 'Triggering staff trail must perform ZERO scene.add calls');
+
+  for (let i = 0; i < 5; i++) dbg.updateCombatVfx(0.025);
+  assert.ok(dbg.staffTrail.sampleCount >= 4, `Staff trail must accumulate live samples, got ${dbg.staffTrail.sampleCount}`);
+
+  // Chain into Hit 2 (cyan) -> Hit 3 Spin360 (blazing gold + wide 0.75 star-disc!)
+  dbg.P.meleeT = 0;
+  dbg.P.comboWindowT = 0.4;
+  assert.equal(dbg.meleeAttack(), true);
+  assert.equal(dbg.staffTrail.colorHex, 0x92f6ff, 'Hit 2 trail must use bright sky-cyan');
+  for (let i = 0; i < 4; i++) dbg.updateCombatVfx(0.025);
+
+  dbg.P.meleeT = 0;
+  dbg.P.comboWindowT = 0.4;
+  assert.equal(dbg.meleeAttack(), true);
+  assert.equal(dbg.staffTrail.colorHex, 0xffd242, 'Hit 3 Spin360 trail must use blazing solar gold');
+  assert.ok(dbg.staffTrail.widthFrac >= 0.70, `Hit 3 Spin360 must widen trail for massive helicopter star-disc, got ${dbg.staffTrail.widthFrac}`);
+  for (let i = 0; i < 4; i++) dbg.updateCombatVfx(0.025);
+  assert.equal(dbg.scene.addCalls, addsBefore, 'Updating staff trail across combo must perform ZERO scene.add calls');
+
+  // After combo ends and fades out, trail hides cleanly
+  dbg.P.meleeT = 0;
+  dbg.P.meleeStep = 0;
+  for (let i = 0; i < 15; i++) dbg.updateCombatVfx(0.03);
+  assert.equal(dbg.staffTrail.active, false, 'Staff trail must deactivate cleanly after fade');
+});
+
+test('Animals module wiring: Timber Wolf, Starlight Manta, 16-reef ecosystem, rare 6-HP companions, and celebrations', () => {
+  const { dbg, rafQueue } = loadGameHarness({ hash: '#test' });
+
+  // 1. Debug handle exposes Animals, LAND, AQUA, and WATER_Y
+  assert.ok(dbg.Animals && typeof dbg.Animals.updateWild === 'function', 'window.__GAME_DEBUG__.Animals must be wired');
+  assert.ok(Array.isArray(dbg.LAND), 'debugHandle must expose LAND');
+  assert.ok(Array.isArray(dbg.AQUA), 'debugHandle must expose AQUA');
+  assert.equal(typeof dbg.WATER_Y, 'number', 'debugHandle must expose WATER_Y');
+
+  // 2. Rosters include Timber Wolf (replacing Woodland Cub) and Starlight Manta
+  assert.ok(dbg.LAND.some(s => s.name === 'Timber Wolf' && s.archetype === 'wolf'), 'LAND must contain Timber Wolf');
+  assert.equal(dbg.LAND.some(s => s.name === 'Woodland Cub'), false, 'LAND must replace Woodland Cub with Timber Wolf');
+  assert.ok(dbg.AQUA.some(s => s.name === 'Starlight Manta' && s.archetype === 'manta'), 'AQUA must contain Starlight Manta');
+
+  // 3. Wish and 16 aquatic reef critters attach AnimalRig + physics states
+  assert.ok(dbg.wish.mesh.userData.animalRig, 'Wish must attach an animalRig');
+  assert.ok(dbg.wish.phys, 'Wish must carry a physics state');
+  assert.equal(dbg.aquaticCritters.length, 16, 'Sunken City must spawn 16 aquatic critters');
+  assert.ok(dbg.aquaticCritters.some(c => c.species && c.species.name === 'Starlight Manta'), 'Aquatic reef must include Starlight Manta');
+  assert.ok(dbg.aquaticCritters.some(c => c.species && c.species.name === 'Moon Jelly'), 'Aquatic reef must include Moon Jelly');
+  assert.ok(dbg.aquaticCritters.every(c => c.phys && c.mesh.userData.animalRig), 'Every aquatic critter must have phys and animalRig');
+
+  // 4. Wild spawn attaches animalRig + phys
+  dbg.spawnWild();
+  assert.ok(dbg.wild.length >= 1, 'spawnWild must add wild critter');
+  assert.ok(dbg.wild[0].phys && dbg.wild[0].mesh.userData.animalRig, 'Wild critter must attach animalRig and phys');
+
+  // 5. Rare companion gets boosted maxHp (>= 6), hurt one-shot on damageCompanion, and celebrates on lightTotem + Secret Shrine
+  const rareSp = dbg.Animals.RARE_SPECIES[0];
+  dbg.addFollower(dbg.P.x + 1.5, dbg.P.y, dbg.P.z + 1.5, null, rareSp);
+  const rareAlly = dbg.followers[dbg.followers.length - 1];
+  assert.ok(rareAlly.maxHp >= 6 && rareAlly.maxHp <= 8, `Rare companion must have boosted maxHp (6-8), got ${rareAlly.maxHp}`);
+  assert.equal(rareAlly.hp, rareAlly.maxHp, 'Rare companion must start at full HP');
+  assert.ok(rareAlly.stats && rareAlly.stats.def >= 0.24, 'Rare Celestial Stag must carry rolled top-tier vanguard stats');
+  assert.ok(rareAlly.phys && rareAlly.mesh.userData.animalRig, 'Companion must attach animalRig and phys');
+
+  const hitOneShots = [];
+  const origTrigger = rareAlly.mesh.userData.animalRig.triggerOneShot;
+  rareAlly.mesh.userData.animalRig.triggerOneShot = (name, dur) => {
+    hitOneShots.push({ name, dur });
+    return origTrigger(name, dur);
+  };
+  dbg.damageCompanion(rareAlly, 1);
+  assert.ok(hitOneShots.some(c => c.name === 'hit'), 'damageCompanion must trigger animalRig hit one-shot');
+
+  // Reset grounded state then lightTotem -> celebrates with positive hop vy > 3.5!
+  rareAlly.phys.vy = 0;
+  rareAlly.phys.onGround = true;
+  dbg.lightTotem();
+  assert.ok(rareAlly.phys.vy > 3.5, `lightTotem must celebrate followers with positive hop vy > 3.5, got ${rareAlly.phys.vy}`);
+
+  // Secret Star Shrine discovery also triggers celebration hop
+  rareAlly.phys.vy = 0;
+  rareAlly.phys.onGround = true;
+  const sec0 = dbg.worldLandmarks.secretObjs[0];
+  dbg.P.x = sec0.x;
+  dbg.P.y = sec0.y;
+  dbg.P.z = sec0.z;
+  rafQueue[rafQueue.length - 1](2100);
+  assert.equal(sec0.discovered, true);
+  assert.ok(rareAlly.phys.vy > 3.5, `Secret Shrine discovery must celebrate followers with positive hop vy > 3.5, got ${rareAlly.phys.vy}`);
+});
+
+test('Enemies module wiring: threat escalation, pooled telegraph rings, proportional grass tramplers, and lazy Sunken City Stalkers', () => {
+  const { dbg, sandbox, scene, rafQueue } = loadGameHarness({ hash: '#test' });
+
+  // 1. Debug handle wires Enemies & initUnderwaterEnemies, and pre-allocates 4 TelegraphRings at startup
+  assert.ok(dbg.Enemies && typeof dbg.Enemies.updateGlooms === 'function', 'window.__GAME_DEBUG__.Enemies must be wired');
+  assert.equal(typeof dbg.initUnderwaterEnemies, 'function', 'debugHandle must expose initUnderwaterEnemies');
+  const telegraphRings = scene.children.filter(c => c.name === 'TelegraphRing');
+  assert.equal(telegraphRings.length, 4, 'startup must pre-allocate 4 pooled TelegraphRings on scene');
+  assert.ok(telegraphRings.every(r => r.visible === false), 'pooled TelegraphRings must start hidden');
+
+  // 2. Solo Sanctuary spawnGloom() stays Tier 1 Classic Gloomblob (3 HP) and zero Stalkers exist at startup
+  dbg.glooms.length = 0;
+  const soloClassic = dbg.spawnGloom();
+  assert.ok(soloClassic, 'spawnGloom() should return spawned enemy state');
+  assert.equal(soloClassic.tierKey, 'classic', 'solo Sanctuary spawnGloom() must spawn classic Gloomblob');
+  assert.equal(soloClassic.hp, 3);
+  assert.equal(soloClassic.maxHp, 3);
+  assert.equal(dbg.glooms.filter(g => g.underwater).length, 0, 'underwater Stalkers must NOT clutter dbg.glooms at Sanctuary startup');
+
+  // 3. With 6 followers & outer coordinates, all escalating Shadow Beast tiers spawn cleanly
+  dbg.glooms.length = 0;
+  for (let i = 0; i < 6; i++) {
+    dbg.addFollower(dbg.P.x + 1 + i * 0.4, dbg.P.y, dbg.P.z + 1, null, dbg.LAND[0]);
+  }
+  dbg.P.x = 70;
+  dbg.P.z = -12;
+
+  const behemoth = dbg.spawnGloom('behemoth');
+  assert.ok(behemoth && behemoth.tierKey === 'behemoth', 'spawnGloom("behemoth") must spawn Eclipse Behemoth');
+  assert.ok(behemoth.maxHp >= 15, `Behemoth with 6 followers must scale HP >= 15, got ${behemoth.maxHp}`);
+
+  const knight = dbg.spawnGloom('knight');
+  assert.ok(knight && knight.tierKey === 'knight' && knight.maxHp === 10, 'spawnGloom("knight") must spawn 10-HP Dread Knight');
+
+  const imp = dbg.spawnGloom('imp');
+  assert.ok(imp && imp.tierKey === 'imp' && imp.maxHp === 8, 'spawnGloom("imp") must spawn 8-HP Cinder Imp');
+
+  const puglin = dbg.spawnGloom('puglin');
+  assert.ok(puglin && puglin.tierKey === 'puglin' && puglin.maxHp === 5, 'spawnGloom("puglin") must spawn 5-HP Shadow Puglin');
+
+  // 4. Pooled telegraph ring activates during Behemoth windup with ZERO runtime scene.addCalls
+  behemoth.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.5);
+  behemoth.state = 'windup';
+  behemoth.stateT = 0.45;
+  knight.mesh.position.set(dbg.P.x + 2.5, dbg.P.y, dbg.P.z + 2.0);
+  knight.state = 'windup';
+  knight.stateT = 0.35;
+  imp.mesh.position.set(dbg.P.x - 2.5, dbg.P.y, dbg.P.z + 2.0);
+  puglin.mesh.position.set(dbg.P.x + 2.0, dbg.P.y, dbg.P.z - 2.5);
+
+  // Check proportional grass tramplers: Behemoth > Knight > Imp > Classic
+  dbg.updateGrassTramplers();
+  const activeTramplers = sandbox.Shaders.tramplers.filter(t => t.w > 0);
+  const trFor = (enemy) => activeTramplers.find(
+    t => Math.hypot(t.x - enemy.mesh.position.x, t.z - enemy.mesh.position.z) < 0.2
+  );
+  const behTr = trFor(behemoth);
+  const kntTr = trFor(knight);
+  const impTr = trFor(imp);
+  assert.ok(behTr && kntTr && impTr, 'Shadow Beasts must register in grass tramplers');
+  assert.ok(behTr.w > kntTr.w && kntTr.w > impTr.w, `Grass trampler radii must scale behemoth (${behTr.w}) > knight (${kntTr.w}) > imp (${impTr.w})`);
+
+  // Settle ambient star/wild/cocoon pools in 4 warmup ticks, then verify windup telegraph rings do ZERO scene.addCalls
+  for (let w = 0; w < 4; w++) rafQueue[rafQueue.length - 1](1320 + w * 40);
+  behemoth.mesh.position.set(dbg.P.x, dbg.P.y, dbg.P.z + 2.5);
+  behemoth.state = 'windup';
+  behemoth.stateT = 0.45;
+  knight.mesh.position.set(dbg.P.x + 2.5, dbg.P.y, dbg.P.z + 2.0);
+  knight.state = 'windup';
+  knight.stateT = 0.35;
+  while (dbg.glooms.filter(g => !g.underwater).length < 6) {
+    dbg.spawnGloom('classic');
+  }
+  const addsBeforeTick = scene.addCalls;
+  rafQueue[rafQueue.length - 1](1500);
+  assert.equal(scene.addCalls, addsBeforeTick, 'updateGlooms with winding-up Behemoth/Knight must perform ZERO scene.addCalls for telegraph rings');
+  assert.equal(scene.children.filter(c => c.name === 'TelegraphRing').length, 4, 'TelegraphRing pool size must remain exactly 4');
+  assert.ok(telegraphRings.some(r => r.visible === true), 'pooled TelegraphRing must become visible during Behemoth/Knight windup');
+
+  // 5. Approaching Sunken City (P.z = 55) lazily spawns 2 underwater Abyssal Stalkers cleanly & idempotently
+  dbg.glooms.length = 0;
+  dbg.P.x = -14;
+  dbg.P.z = 55;
+  rafQueue[rafQueue.length - 1](1600);
+  const stalkers = dbg.glooms.filter(g => g.underwater === true && g.tierKey === 'stalker');
+  assert.equal(stalkers.length, 2, 'approaching Sunken City (P.z = 55) must lazily spawn 2 underwater Abyssal Stalkers');
+
+  // Subsequent ticks and explicit debugHandle call must remain idempotent (still 2 stalkers)
+  dbg.initUnderwaterEnemies();
+  rafQueue[rafQueue.length - 1](1650);
+  const stalkersAfter = dbg.glooms.filter(g => g.underwater === true && g.tierKey === 'stalker');
+  assert.equal(stalkersAfter.length, 2, 'lazy Sunken City Stalker init must be idempotent');
+});
+
+test('Individualized companion stats, defense mitigation, tank aggro pull, aerial shockwave evasion, and under-the-hood UX', () => {
+  const { dbg, doc, rafQueue } = loadGameHarness({ hash: '#test' });
+
+  // 1. Wild spawn rolls individualized stats & befriending preserves them on the new follower
+  dbg.wild.length = 0;
+  dbg.spawnWild();
+  assert.equal(dbg.wild.length, 1);
+  const w = dbg.wild[0];
+  assert.ok(w.stats && typeof w.stats.atk === 'number' && typeof w.stats.def === 'number', 'Wild animal must roll individualized stats');
+  assert.ok(w.stats.spd >= dbg.Animals.CHASE_SPEED_MIN && w.stats.spd <= dbg.Animals.CHASE_SPEED_MAX,
+    `Wild animal speed ${w.stats.spd} must remain within chase-friendly bounds`);
+
+  const rolledStats = w.stats;
+  w.mesh.position.set(dbg.P.x + 1.4, dbg.P.y, dbg.P.z);
+  w.state = 'calmTrust';
+  w.trustT = 2.18;
+  rafQueue[rafQueue.length - 1](1200);
+  const befriended = dbg.followers[dbg.followers.length - 1];
+  assert.ok(befriended, 'Befriending wild animal must add follower');
+  assert.equal(befriended.stats, rolledStats, 'Befriended companion must preserve exact rolled individual stats from wild');
+
+  // Toast stays purely organic/story-driven with ZERO stat numbers or spreadsheets
+  const toastText = doc.getElementById('toast').textContent || '';
+  assert.equal(/\b(HP|ATK|DEF|SPD|DPS)\b/i.test(toastText), false, `Toast must keep stats purely under the hood: "${toastText}"`);
+
+  // 2. Tank (Berry Beetle) mitigates damage & knockback much better than striker (Ember Drake)
+  dbg.followers.length = 0;
+  const beetleSp = dbg.LAND.find(s => s.name === 'Berry Beetle');
+  const drakeSp = dbg.LAND.find(s => s.name === 'Ember Drake');
+  const owlSp = dbg.LAND.find(s => s.name === 'Golden Owl');
+  dbg.addFollower(dbg.P.x + 2.0, dbg.P.y, dbg.P.z, null, beetleSp);
+  dbg.addFollower(dbg.P.x - 2.0, dbg.P.y, dbg.P.z, null, drakeSp);
+  const beetle = dbg.followers[0];
+  const drake = dbg.followers[1];
+
+  const beetleHp0 = beetle.hp;
+  const drakeHp0 = drake.hp;
+  dbg.damageCompanion(beetle, 2, 10, 0);
+  dbg.damageCompanion(drake, 2, 10, 0);
+  const beetleLoss = beetleHp0 - beetle.hp;
+  const drakeLoss = drakeHp0 - drake.hp;
+  assert.ok(beetleLoss < drakeLoss - 0.4, `Berry Beetle tank loss (${beetleLoss}) must be far less than Ember Drake loss (${drakeLoss})`);
+  assert.ok(beetle.kx < drake.kx * 0.7, `Berry Beetle tank knockback (${beetle.kx}) must be well below Ember Drake (${drake.kx})`);
+
+  // 3. Tank front-line aggro pull: enemy prefers Berry Beetle over an equidistant Ember Drake
+  dbg.glooms.length = 0;
+  dbg.P.x = 0; dbg.P.z = -18; // keep Starkeeper out of close-range tie
+  dbg.spawnGloom('classic');
+  const g = dbg.glooms[0];
+  g.mesh.position.set(0, dbg.heightAt(0, 0), 0);
+  g.state = 'windup';
+  g.stateT = 0.01;
+  beetle.mesh.position.set(4.0, dbg.heightAt(4, 0), 0);
+  drake.mesh.position.set(-3.6, dbg.heightAt(-3.6, 0), 0); // slightly closer than beetle, yet beetle's 1.65u aggroPull wins!
+  rafQueue[rafQueue.length - 1](1400);
+  assert.equal(g.targetAlly, beetle, 'Berry Beetle tank must draw enemy aggro ahead of nearby striker');
+
+  // 4. Aerial companion soaring high naturally evades Eclipse Behemoth ground shockwave
+  dbg.addFollower(0, dbg.heightAt(0, 0) + 2.0, 2.0, null, owlSp);
+  const owl = dbg.followers[2];
+  owl.hurtInvulnT = 0;
+  beetle.hurtInvulnT = 0;
+  const owlHpBefore = owl.hp;
+  const beetleHpBefore = beetle.hp;
+
+  dbg.glooms.length = 0;
+  dbg.spawnGloom('behemoth');
+  const beh = dbg.glooms[0];
+  const by = dbg.heightAt(0, 0);
+  beh.mesh.position.set(0, by, 0);
+  beh.state = 'lunge';
+  beh.stateT = 0.08;
+  beh.attackDidHit = false;
+  owl.mesh.position.set(0, by + 2.1, 2.0); // soaring 2.1u above Behemoth slam
+  beetle.mesh.position.set(0, by, 2.0);    // grounded inside 4.8u slam
+  rafQueue[rafQueue.length - 1](1440);
+  assert.equal(owl.hp, owlHpBefore, 'High-hovering aerial Owl must evade ground Behemoth shockwave');
+  assert.ok(beetle.hp < beetleHpBefore, 'Grounded tank inside Behemoth shockwave must take the hit');
+});

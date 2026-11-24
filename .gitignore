@@ -1,0 +1,13 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+
+# Python / build scratch
+scripts/__pycache__/
+*.pyc
+*.log
+
+# Raw standalone third-party asset packs (excluded per Quaternius QAL v1.0 Sec. 3a & repo size)
+assets/Modular Character Outfits - Fantasy\[Standard\]/
+assets/Bestiary - Dungeon Monsters Kit\[Standard\]/
+assets/Ultimate Monsters/

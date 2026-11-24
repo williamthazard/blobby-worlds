@@ -1,0 +1,142 @@
+Blobby Worlds: The Starkeeper — 3D Asset License & Provenance
+=============================================================
+
+assets/starkeeper.glb (and its file:// wrapper assets/starkeeper.glb.js)
+was compiled by scripts/build_starkeeper_glb.py from two CC0 1.0 Universal
+(Public Domain) packs created by Quaternius (https://quaternius.com/):
+
+1. Fantasy Adventurer Outfit & 65-Bone Skeleton:
+   - Quaternius Modular Character Outfits - Fantasy (Male_Ranger.gltf, T_Ranger_BaseColor/Normal/ORM,
+     T_Regular_Male_Dark_BaseColor/Normal)
+   - License: CC0 1.0 Universal (Public Domain Dedication)
+   - Source: https://quaternius.com/packs/modularcharacteroutfitsfantasy.html
+
+2. Sculpted Human Head, Hand-Painted Eyes, 3D Eyebrows & Back Hairline:
+   - Quaternius Universal Base Characters (Superhero_Male_FullBody.gltf, Hair_Buzzed.gltf, T_Eye_Brown.png)
+   - License: CC0 1.0 Universal (Public Domain Dedication)
+   - Source: https://quaternius.com/packs/universalbasecharacters.html
+
+3. Humanoid Skeletal Animation Library:
+   - Quaternius Universal Animation Library (AnimationLibrary_Godot_Standard.gltf)
+   - License: CC0 1.0 Universal (Public Domain Dedication)
+   - Source mirror: https://github.com/J-Ponzo/gltf-universal-animation-library
+
+Modifications applied by scripts/build_starkeeper_glb.py:
+- Removed default Backpack mesh to keep the back clear for Starkeeper's cloak.
+- Retargeted 22 animations from the Universal Animation Library onto the
+  Adventurer 49-bone humanoid skeleton using world-rest-basis quaternion transforms.
+- Synthesized 10 additional gameplay animations (Backpedal, StrafeLeft,
+  StrafeRight, Melee2, Spin360, SlideThrust, HillSlide, PlungeDive,
+  PlungeLand, CastNova) and 4 facial morph targets (Blink, Determined,
+  Smile, Hurt).
+
+License text: https://creativecommons.org/publicdomain/zero/1.0/
+
+-------------------------------------------------------------
+Animal & Wildlife 3D Models (assets/animals/*.glb & *.glb.js)
+-------------------------------------------------------------
+
+Compiled by scripts/build_animals_glb.py from the following public-domain
+(CC0 1.0) and MIT-licensed sources:
+
+1. Quaternius Animals Pack (CC0 1.0 Universal):
+   - Fox.glb        -> assets/animals/fox.glb (with baked "Feline" morph target for Moss Lynx)
+   - Horse_White.glb -> assets/animals/unicorn.glb
+   - Wolf.glb       -> assets/animals/wolf.glb
+   - Stag.glb       -> assets/animals/stag.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/animals_pack
+   - License: CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)
+
+2. Quaternius Dinosaurs Pack (CC0 1.0 Universal):
+   - Velociraptor.glb -> assets/animals/drake.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/dinosaurs_pack
+   - License: CC0 1.0 Universal
+
+3. Quaternius Easy Enemies Pack (CC0 1.0 Universal):
+   - Wasp.glb       -> assets/animals/firefly.glb
+   - Snake.glb      -> assets/animals/eel.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/easy_enemies_pack
+   - License: CC0 1.0 Universal
+
+4. Quaternius Cute Fish Pack & Fish Pack (CC0 1.0 Universal):
+   - BlueTang.glb   -> assets/animals/fish_tang.glb
+   - Koi.glb        -> assets/animals/fish_koi.glb
+   - Manta_ray.glb  -> assets/animals/manta.glb
+   - Source mirrors:
+     https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/cute_fish_pack
+     https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/fish_pack
+   - License: CC0 1.0 Universal
+
+5. Gobkit Freebies (CC0 1.0 Universal):
+   - Asianladybeetle.glb -> assets/animals/beetle.glb (https://gobkit.com/freebies/insect002/Asianladybeetle.glb)
+   - Kiwi.glb            -> assets/animals/kiwi.glb (https://gobkit.com/freebies/birds/Kiwi.glb)
+   - License: CC0 1.0 Universal
+
+6. Three.js r128 Examples (MIT License):
+   - Parrot.glb     -> assets/animals/bird.glb (https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/Parrot.glb)
+   - SkeletonUtils.js -> vendor/SkeletonUtils.js (https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/js/utils/SkeletonUtils.js)
+   - License: MIT License (https://opensource.org/licenses/MIT)
+
+Modifications applied by scripts/build_animals_glb.py:
+- Normalized all 13 models under a unified AnimalRoot node facing +Z forward
+  at canonical game heights with land (minY = 0) or centered (Y = 0) grounding.
+- Computed and injected smooth vertex NORMALs on bird (Parrot.glb) and
+  crease-aware smooth normals on beetle and kiwi.
+- Baked the "Feline" morph target on fox.glb for Moss Lynx snout/cheek shaping.
+- Validated and repaired animation sampler counts, timestamps, quaternion
+  normalization/continuity, and downsampled dense skeletal tracks >45 frames.
+
+-------------------------------------------------------------
+Shadow Beast & Enemy 3D Models (assets/enemies/*.glb & *.glb.js)
+-------------------------------------------------------------
+
+Compiled by scripts/build_enemies_glb.py from the following Quaternius
+QAL v1.0 and CC0 1.0 Universal (Public Domain) sources:
+
+1. Quaternius Bestiary - Dungeon Monsters Kit [Standard] (QAL v1.0):
+   - Puglin.glb -> assets/enemies/puglin.glb (retargeted with 8 UAL animations)
+   - Imp.glb    -> assets/enemies/imp.glb (retargeted with 9 UAL animations)
+   - Source: https://quaternius.com/
+   - License: Quaternius Asset License (QAL) v1.0 (https://quaternius.com/license.html)
+     (Compiled as incorporated game product assets; standalone source packs remain
+      governed by QAL v1.0 restrictions against standalone asset redistribution.)
+
+2. Quaternius Easy Enemies Pack (CC0 1.0 Universal):
+   - Spider.glb -> assets/enemies/weaver.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/easy_enemies_pack
+   - License: CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)
+
+3. Quaternius Platformer Game Pack (CC0 1.0 Universal):
+   - Bee.glb  -> assets/enemies/stinger.glb
+   - Crab.glb -> assets/enemies/stalker.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/platformer_game_pack
+   - License: CC0 1.0 Universal
+
+4. Quaternius Single Knight Pack (CC0 1.0 Universal):
+   - KnightCharacter.glb -> assets/enemies/knight.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/single_knight_pack
+   - License: CC0 1.0 Universal
+
+5. Quaternius Dinosaurs Pack (CC0 1.0 Universal):
+   - Trex.glb -> assets/enemies/behemoth.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/dinosaurs_pack
+   - License: CC0 1.0 Universal
+
+6. Humanoid Skeletal Animation Library (CC0 1.0 Universal):
+   - Quaternius Universal Animation Library (AnimationLibrary_Godot_Standard.gltf)
+   - Source mirror: https://github.com/J-Ponzo/gltf-universal-animation-library
+   - License: CC0 1.0 Universal
+
+Modifications applied by scripts/build_enemies_glb.py:
+- Normalized all 7 enemy models under a unified EnemyRoot node facing +Z forward
+  at canonical game heights with land (minY = 0) or centered (Y = 0) grounding.
+- Stripped KHR_materials_emissive_strength and non-core glTF extensions for
+  strict Three.js r128 compatibility.
+- Compressed Bestiary 2K PBR textures (BaseColor & ORM to 512x512 JPEG, Normal
+  & Emissive to 256x256 PNG) and packed UVs/weights/rotations into compact
+  core glTF normalized accessors.
+- Retargeted UAL animations onto Puglin and Imp 55-bone skeletons via
+  world-rest-basis quaternion similarity transforms with zero horizontal
+  pelvis drift and leg-height-scaled vertical bounce.
+- Validated/repaired animation sampler counts, timestamps, unit quaternions,
+  hemisphere continuity, and unit vertex normals across all 7 archetypes.
