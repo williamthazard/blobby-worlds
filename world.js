@@ -921,6 +921,237 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     return geo;
   }
 
+  function buildBirchTrunkGeo() {
+    const parts = [];
+    const main = new THREE.CylinderGeometry(0.14, 0.34, 6.0, 8, 6);
+    main.translate(0, 3.0, 0);
+    const pos = main.attributes.position;
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const ang = Math.atan2(z, x);
+      const flare = y < 1.0 ? 1 + (1.0 - y) * 0.32 : 1;
+      const curve = Math.sin(y * 0.55) * 0.12;
+      pos.setXYZ(i, x * flare + curve, y, z * flare);
+      const band = Math.sin(y * 9.5 + ang * 1.5) > 0.72 ? 0.32 : 0.94;
+      const ao = (0.68 + 0.32 * Math.min(1, y / 2.2)) * band;
+      cols[i * 3] = ao;
+      cols[i * 3 + 1] = ao * 0.98;
+      cols[i * 3 + 2] = ao * 0.94;
+    }
+    main.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    main.computeVertexNormals();
+    parts.push(main);
+
+    const boughs = [
+      { ang: 0.4, y0: 4.3, len: 2.1, tilt: 0.48 },
+      { ang: 2.1, y0: 4.8, len: 1.9, tilt: 0.44 },
+      { ang: 3.9, y0: 4.5, len: 2.0, tilt: 0.50 },
+      { ang: 5.4, y0: 5.1, len: 1.7, tilt: 0.40 },
+    ];
+    for (let b = 0; b < boughs.length; b++) {
+      const br = boughs[b];
+      const bg = new THREE.CylinderGeometry(0.045, 0.11, br.len, 6, 2);
+      bg.translate(0, br.len * 0.5, 0);
+      const bp = bg.attributes.position;
+      const bc = new Float32Array(bp.count * 3);
+      const ct = Math.cos(br.tilt), st = Math.sin(br.tilt);
+      const ca = Math.cos(br.ang), sa = Math.sin(br.ang);
+      for (let i = 0; i < bp.count; i++) {
+        const lx = bp.getX(i), ly = bp.getY(i), lz = bp.getZ(i);
+        const tx = lx * ct + ly * st;
+        const ty = -lx * st + ly * ct + br.y0;
+        bp.setXYZ(i, tx * ca - lz * sa, ty, tx * sa + lz * ca);
+        const s = 0.85 + 0.12 * (ly / br.len);
+        bc[i * 3] = s; bc[i * 3 + 1] = s * 0.98; bc[i * 3 + 2] = s * 0.94;
+      }
+      bg.setAttribute('color', new THREE.BufferAttribute(bc, 3));
+      bg.computeVertexNormals();
+      parts.push(bg);
+    }
+    return mergeGeometries(parts);
+  }
+
+  function buildBirchCanopyGeo() {
+    const parts = [];
+    const centerY = 6.9;
+    const rings = [
+      { count: 9, rad: 2.15, y: 5.2, cardW: 2.35, cardH: 2.20, pitch: 0.36 },
+      { count: 9, rad: 1.95, y: 6.7, cardW: 2.40, cardH: 2.30, pitch: 0.08 },
+      { count: 7, rad: 1.25, y: 8.0, cardW: 2.15, cardH: 2.10, pitch: -0.45 },
+      { count: 4, rad: 0.45, y: 8.85, cardW: 1.85, cardH: 1.80, pitch: -0.95 },
+    ];
+    let seed = 210;
+    for (let r = 0; r < rings.length; r++) {
+      const rg = rings[r];
+      for (let i = 0; i < rg.count; i++) {
+        seed++;
+        const ang = (i / rg.count) * Math.PI * 2 + r * 0.61;
+        const rad = rg.rad * (0.85 + hash2(seed * 3.3, i * 4.1) * 0.25);
+        const ox = Math.cos(ang) * rad;
+        const oz = Math.sin(ang) * rad;
+        const oy = rg.y + (hash2(i * 2.9, seed * 1.7) - 0.5) * 0.55;
+        const yaw = Math.atan2(ox, oz) + (i % 2 === 0 ? 0.25 : -0.25);
+        const pitch = rg.pitch + (hash2(seed, r) - 0.5) * 0.30;
+        const roll = (hash2(r * 7.1, seed * 2.3) - 0.5) * 0.55;
+        const tint = 0.90 + hash2(seed * 1.9, i * 5.3) * 0.20;
+        parts.push(buildCurvedLeafCard(rg.cardW, rg.cardH, 0.46, ox, oy, oz, yaw, pitch, roll, centerY, tint * 0.98, tint * 1.06, tint * 0.78));
+      }
+    }
+    return mergeGeometries(parts);
+  }
+
+  function buildWillowCanopyGeo() {
+    const parts = [];
+    const centerY = 6.2;
+    const crown = [
+      { count: 10, rad: 2.75, y: 6.4, cardW: 2.6, cardH: 2.4, pitch: 0.30 },
+      { count: 7, rad: 1.65, y: 7.7, cardW: 2.5, cardH: 2.3, pitch: -0.45 },
+      { count: 4, rad: 0.55, y: 8.45, cardW: 2.2, cardH: 2.0, pitch: -1.0 },
+    ];
+    let seed = 310;
+    for (let r = 0; r < crown.length; r++) {
+      const rg = crown[r];
+      for (let i = 0; i < rg.count; i++) {
+        seed++;
+        const ang = (i / rg.count) * Math.PI * 2 + r * 0.47;
+        const ox = Math.cos(ang) * rg.rad;
+        const oz = Math.sin(ang) * rg.rad;
+        const oy = rg.y + (hash2(i, seed) - 0.5) * 0.45;
+        const tint = 0.84 + hash2(seed, r * 3.1) * 0.22;
+        parts.push(buildCurvedLeafCard(rg.cardW, rg.cardH, 0.50, ox, oy, oz, Math.atan2(ox, oz), rg.pitch, 0, centerY, tint * 0.88, tint * 1.02, tint * 0.84));
+      }
+    }
+    // Hanging weeping frond curtains
+    for (let i = 0; i < 14; i++) {
+      const ang = (i / 14) * Math.PI * 2 + 0.15;
+      const rad = 2.65 + (i % 3) * 0.42;
+      const ox = Math.cos(ang) * rad;
+      const oz = Math.sin(ang) * rad;
+      const oy = 4.35 + (i % 2) * 0.45;
+      const tint = 0.82 + (i % 3) * 0.08;
+      parts.push(buildCurvedLeafCard(1.45, 3.65, 0.35, ox, oy, oz, Math.atan2(ox, oz), 1.44, 0, centerY, tint * 0.86, tint * 1.0, tint * 0.82));
+    }
+    return mergeGeometries(parts);
+  }
+
+  function buildPalmTrunkGeo() {
+    const segs = 10;
+    const h = 7.2;
+    const geo = new THREE.CylinderGeometry(0.14, 0.28, h, 8, segs);
+    geo.translate(0, h * 0.5, 0);
+    const pos = geo.attributes.position;
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const t = Math.max(0, Math.min(1, y / h));
+      const archX = Math.sin(t * Math.PI * 0.65) * 0.68;
+      const archZ = (t * t) * 0.32;
+      const ring = 1 + 0.08 * Math.sin(y * 7.5);
+      pos.setXYZ(i, x * ring + archX, y, z * ring + archZ);
+      const shade = 0.72 + 0.24 * t - (Math.sin(y * 7.5) > 0.4 ? 0.10 : 0);
+      cols[i * 3] = shade;
+      cols[i * 3 + 1] = shade * 0.90;
+      cols[i * 3 + 2] = shade * 0.76;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  function buildPalmCanopyGeo() {
+    const parts = [];
+    const centerY = 7.4;
+    const ox0 = 0.60;
+    const oz0 = 0.32;
+    for (let i = 0; i < 8; i++) {
+      const ang = (i / 8) * Math.PI * 2 + 0.22;
+      const reach = 1.65 + (i % 2) * 0.25;
+      const ox = ox0 + Math.cos(ang) * reach;
+      const oz = oz0 + Math.sin(ang) * reach;
+      const oy = 7.35 + (i % 2) * 0.38;
+      const yaw = Math.atan2(Math.cos(ang), Math.sin(ang));
+      const pitch = 1.15 + (i % 2) * 0.22;
+      const tint = 0.88 + (i % 3) * 0.08;
+      parts.push(buildCurvedLeafCard(1.25, 3.25, 0.55, ox, oy, oz, yaw, pitch, 0, centerY, tint * 0.92, tint * 1.04, tint * 0.74));
+    }
+    return mergeGeometries(parts);
+  }
+
+  function buildBushGeo() {
+    const parts = [];
+    const centerY = 0.65;
+    for (let k = 0; k < 7; k++) {
+      const ang = (k / 7) * Math.PI * 2 + 0.3;
+      const rad = k === 0 ? 0.06 : 0.34;
+      const ox = Math.cos(ang) * rad;
+      const oz = Math.sin(ang) * rad;
+      const oy = k === 0 ? 0.76 : 0.56 + (k % 2) * 0.14;
+      const pitch = k === 0 ? -0.95 : 0.32;
+      const tint = 0.86 + (k % 3) * 0.09;
+      parts.push(buildCurvedLeafCard(1.05, 0.95, 0.32, ox, oy, oz, ang, pitch, 0, centerY, tint * 0.88, tint * 1.02, tint * 0.80));
+    }
+    return mergeGeometries(parts);
+  }
+
+  function buildLogGeo() {
+    const log = new THREE.CylinderGeometry(0.38, 0.44, 3.1, 8, 4);
+    log.rotateX(Math.PI * 0.5);
+    log.translate(0, 0.40, 0);
+    const pos = log.attributes.position;
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const bump = 0.94 + 0.12 * noise2(z * 2.1 + 4, x * 2.1 - 3);
+      pos.setXYZ(i, x * bump, Math.max(0.02, y * bump), z);
+      const moss = smoothstep(0.45, 0.78, y);
+      cols[i * 3] = 0.92 - moss * 0.35;
+      cols[i * 3 + 1] = 0.90 - moss * 0.08;
+      cols[i * 3 + 2] = 0.85 - moss * 0.42;
+    }
+    log.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    log.computeVertexNormals();
+    return log;
+  }
+
+  function buildStumpGeo() {
+    const stump = new THREE.CylinderGeometry(0.54, 0.76, 0.92, 9, 3);
+    stump.translate(0, 0.46, 0);
+    const pos = stump.attributes.position;
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const ang = Math.atan2(z, x);
+      const rootFlare = y < 0.36 ? 1 + (0.36 - y) * (0.45 + 0.25 * Math.cos(ang * 5)) : 1;
+      pos.setXYZ(i, x * rootFlare, y, z * rootFlare);
+      const isTop = y > 0.86;
+      const ao = isTop ? 1.18 : (0.64 + 0.32 * (y / 0.92));
+      cols[i * 3] = ao;
+      cols[i * 3 + 1] = ao * (isTop ? 1.06 : 0.96);
+      cols[i * 3 + 2] = ao * (isTop ? 0.88 : 0.88);
+    }
+    stump.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    stump.computeVertexNormals();
+    return stump;
+  }
+
+  function buildLilypadGeo() {
+    const pad = new THREE.CylinderGeometry(0.42, 0.40, 0.04, 12, 1);
+    pad.translate(0, 0.02, 0);
+    ensureVertexColors(pad, 0.42, 0.78, 0.38);
+    pad.computeVertexNormals();
+
+    const bud = new THREE.CylinderGeometry(0.05, 0.09, 0.09, 6, 1);
+    bud.translate(0.07, 0.07, 0.04);
+    ensureVertexColors(bud, 0.98, 0.62, 0.78);
+    bud.computeVertexNormals();
+    return mergeGeometries([pad, bud]);
+  }
+
   // ---------- PBR prop materials & registry ----------
 
   const texSets = (typeof Textures !== 'undefined' && Textures.sets) ? Textures.sets : null;
@@ -933,11 +1164,15 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       metalness: 0.02,
     };
     if (set) {
-      if (set.map) opts.map = set.map;
+      if (set.map && !(extra && extra.skipAlbedoMap)) opts.map = set.map;
       if (set.normalMap) opts.normalMap = set.normalMap;
       if (set.roughnessMap) opts.roughnessMap = set.roughnessMap;
     }
-    if (extra) Object.assign(opts, extra);
+    if (extra) {
+      for (const k in extra) {
+        if (k !== 'skipAlbedoMap') opts[k] = extra[k];
+      }
+    }
     const mat = new THREE.MeshStandardMaterial(opts);
     if (mat.color && typeof mat.color.convertSRGBToLinear === 'function') {
       mat.color.convertSRGBToLinear();
@@ -967,7 +1202,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     ? Shaders.createKelpMaterial()
     : new THREE.MeshStandardMaterial({ color: 0x2e8b66, side: THREE.DoubleSide, roughness: 0.72 });
 
-  function makeFoliageCardMat(cardTex, fallbackHex, roughness) {
+  function makeFoliageCardMat(cardTex, fallbackHex, roughness, reactiveOpts) {
     const mat = new THREE.MeshStandardMaterial({
       color: cardTex ? 0xffffff : fallbackHex,
       map: cardTex || null,
@@ -980,7 +1215,11 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     if (mat.color && typeof mat.color.convertSRGBToLinear === 'function') {
       mat.color.convertSRGBToLinear();
     }
-    if (typeof Shaders !== 'undefined' && typeof Shaders.patchTreeWind === 'function') {
+    if (reactiveOpts) {
+      if (typeof Shaders !== 'undefined' && typeof Shaders.patchFoliageReactive === 'function') {
+        Shaders.patchFoliageReactive(mat, reactiveOpts);
+      }
+    } else if (typeof Shaders !== 'undefined' && typeof Shaders.patchTreeWind === 'function') {
       Shaders.patchTreeWind(mat, true);
     }
     return mat;
@@ -991,14 +1230,44 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     Shaders.patchTreeWind(trunkMat, false);
   }
 
+  const birchTrunkMat = makePropMat('bark', 0xe6e0d4, 0xeae5db, 0.84, { vertexColors: true, skipAlbedoMap: true });
+  if (typeof Shaders !== 'undefined' && typeof Shaders.patchTreeWind === 'function') {
+    Shaders.patchTreeWind(birchTrunkMat, false);
+  }
+
+  const woodFloorMat = makePropMat('bark', 0x6b4a32, 0xe8d6c4, 0.92, { vertexColors: true });
+
+  const reedMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.82,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+    vertexColors: true,
+  });
+  if (typeof Shaders !== 'undefined' && typeof Shaders.patchFoliageReactive === 'function') {
+    Shaders.patchFoliageReactive(reedMat, { amp: 0.16, heightScale: 1.55, useUvY: true });
+  }
+
   const PROPS = {
     trunk: {
       geo: buildFlaredTrunkGeo(),
       mat: trunkMat,
     },
+    birchTrunk: {
+      geo: buildBirchTrunkGeo(),
+      mat: birchTrunkMat,
+    },
+    palmTrunk: {
+      geo: buildPalmTrunkGeo(),
+      mat: trunkMat,
+    },
     oakCanopy: {
       geo: buildOakCanopyGeo(),
       mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.oakLeafCard : null, 0x4d9e4f, 0.78),
+    },
+    birchCanopy: {
+      geo: buildBirchCanopyGeo(),
+      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.oakLeafCard : null, 0x6ab84e, 0.78),
     },
     pineCanopy: {
       geo: buildPineCanopyGeo(false),
@@ -1008,13 +1277,41 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       geo: buildPineCanopyGeo(true),
       mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.pineSnowBoughCard : null, 0xd8e4ea, 0.74),
     },
+    willowCanopy: {
+      geo: buildWillowCanopyGeo(),
+      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.oakLeafCard : null, 0x4a8f48, 0.80),
+    },
+    palmCanopy: {
+      geo: buildPalmCanopyGeo(),
+      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.oakLeafCard : null, 0x5ca442, 0.78),
+    },
     cactus: {
       geo: buildRibbedCactusGeo(),
       mat: makePropMat('grass', 0x4f9e6b, 0xcae6cd, 0.78, { vertexColors: true }),
     },
+    bush: {
+      geo: buildBushGeo(),
+      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.oakLeafCard : null, 0x3b7a38, 0.82, { amp: 0.12, heightScale: 1.35 }),
+    },
     rock: {
       geo: buildMossyBoulderGeo(),
       mat: makePropMat('rock', 0x8b8b8f, 0xe8eaed, 0.86, { vertexColors: true }),
+    },
+    boulderRock: {
+      geo: buildMossyBoulderGeo(),
+      mat: makePropMat('rock', 0x938d86, 0xe8e4dc, 0.88, { vertexColors: true }),
+    },
+    fallenLog: {
+      geo: buildLogGeo(),
+      mat: woodFloorMat,
+    },
+    stump: {
+      geo: buildStumpGeo(),
+      mat: woodFloorMat,
+    },
+    lilypad: {
+      geo: buildLilypadGeo(),
+      mat: makePropMat('leaves', 0x4b8f48, 0xd8eed0, 0.46, { vertexColors: true, side: THREE.DoubleSide }),
     },
     runeStone: {
       geo: buildRuneStoneGeo(),
@@ -1026,12 +1323,44 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     },
     fern: {
       geo: buildFernClusterGeo(),
-      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.fernCard : null, 0x3e7432, 0.84),
+      mat: makeFoliageCardMat(typeof Textures !== 'undefined' ? Textures.fernCard : null, 0x3e7432, 0.84, { amp: 0.14, heightScale: 0.95, useUvY: true }),
     },
     reed: {
       geo: buildReedClusterGeo(),
-      mat: grassMat,
+      mat: reedMat,
     },
+  };
+
+  const PROP_GLB_KEYS = {
+    tree: 'oak_tree',
+    birch: 'birch_tree',
+    pine: 'pine_tree',
+    pineSnow: 'pine_snow',
+    willow: 'willow_tree',
+    palm: 'palm_tree',
+    cactus: 'cactus_flower',
+    bush: 'bush_berry',
+    rock: 'boulder_moss',
+    boulderRock: 'boulder_rock',
+    fallenLog: 'fallen_log',
+    stump: 'tree_stump',
+    lilypad: 'lilypad',
+  };
+
+  const PROP_GLB_SCALE_ADJUST = {
+    oak_tree: 1.0,
+    birch_tree: 1.0,
+    pine_tree: 1 / 0.85,
+    pine_snow: 1 / 0.85,
+    willow_tree: 1 / 0.90,
+    palm_tree: 1.0,
+    cactus_flower: 0.58,
+    bush_berry: 1.0,
+    boulder_moss: 1.15,
+    boulder_rock: 0.95,
+    fallen_log: 1.0,
+    tree_stump: 1.0,
+    lilypad: 1.30,
   };
 
   const grassGeo = buildGrassTuftGeo();
@@ -1040,7 +1369,6 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   // ---------- chunk builder & streamer ----------
 
   const RES = 36;
-  const WRES = 16;
   const GRID_PAD = RES + 3;
   const GRASS_CAP_HIGH = 1296;
   const GRASS_CAP_BAL = 625;
@@ -1070,7 +1398,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     }
   }
 
-  function makeInstances(type, items, scaleBase, castShadow, receiveShadow, tintBase) {
+  function makeInstances(type, items, scaleBase, castShadow, receiveShadow, tintBase, flatTilt) {
     const def = PROPS[type];
     const mesh = new THREE.InstancedMesh(def.geo, def.mat, items.length);
     mesh.castShadow = castShadow;
@@ -1078,13 +1406,14 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     // Prevent r128 Frustum.intersectsObject from culling world-offset instances by origin geo sphere
     mesh.frustumCulled = false;
 
+    const tiltAmt = flatTilt ? 0 : 0.14;
     for (let i = 0; i < items.length; i++) {
       const p = items[i];
       dummy.position.set(p.x, p.y, p.z);
       dummy.rotation.set(
-        (hash2(p.x + 9, p.z) - 0.5) * 0.14,
+        tiltAmt ? (hash2(p.x + 9, p.z) - 0.5) * tiltAmt : 0,
         hash2(p.x, p.z) * Math.PI * 2,
-        (hash2(p.x, p.z + 9) - 0.5) * 0.14
+        tiltAmt ? (hash2(p.x, p.z + 9) - 0.5) * tiltAmt : 0
       );
       const s = scaleBase * p.s;
       dummy.scale.set(s, s, s);
@@ -1102,9 +1431,66 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     return mesh;
   }
 
+  function registerPropSwap(propType, primaryMesh, chunk, hideTargets) {
+    if (typeof Env === 'undefined' || !Env || typeof Env.registerInstancedSwap !== 'function') return;
+    const glbKey = PROP_GLB_KEYS[propType];
+    if (!glbKey || !primaryMesh) return;
+    Env.registerInstancedSwap(glbKey, primaryMesh, {
+      chunk,
+      parent: scene,
+      hideTargets: hideTargets || null,
+      removeFallback: true,
+      scaleAdjust: PROP_GLB_SCALE_ADJUST[glbKey] !== undefined ? PROP_GLB_SCALE_ADJUST[glbKey] : 1.0,
+      THREE,
+    });
+  }
+
   const _tintNeutral = { r: 1, g: 1, b: 1 };
   const _tintOak = { r: 0.96, g: 1.02, b: 0.92 };
   const _tintPine = { r: 0.90, g: 1.0, b: 0.94 };
+  const _tintBirch = { r: 0.98, g: 1.04, b: 0.88 };
+  const _tintWillow = { r: 0.90, g: 1.02, b: 0.88 };
+  const _tintPalm = { r: 0.96, g: 1.04, b: 0.84 };
+
+  function buildChunkWaterTile(chunk) {
+    if (chunk.waterMesh) {
+      scene.remove(chunk.waterMesh);
+      const mIdx = chunk.meshes.indexOf(chunk.waterMesh);
+      if (mIdx >= 0) chunk.meshes.splice(mIdx, 1);
+      chunk.waterMesh = null;
+    }
+    if (chunk.waterGeo) {
+      chunk.waterGeo.dispose();
+      const gIdx = chunk.uniqueGeos.indexOf(chunk.waterGeo);
+      if (gIdx >= 0) chunk.uniqueGeos.splice(gIdx, 1);
+      chunk.waterGeo = null;
+    }
+    if (!chunk.hasWater) return;
+
+    const wRes = qualityMode === 'high' ? 24 : 16;
+    const ox = chunk.cx * CHUNK;
+    const oz = chunk.cz * CHUNK;
+    const wGeo = new THREE.PlaneGeometry(CHUNK, CHUNK, wRes, wRes);
+    wGeo.rotateX(-Math.PI / 2);
+    const wPos = wGeo.attributes.position;
+    const bedHeights = new Float32Array(wPos.count);
+    for (let i = 0; i < wPos.count; i++) {
+      const wx = wPos.getX(i) + ox;
+      const wz = wPos.getZ(i) + oz;
+      bedHeights[i] = heightAt(wx, wz);
+    }
+    wGeo.setAttribute('aBedHeight', new THREE.BufferAttribute(bedHeights, 1));
+    const waterTile = new THREE.Mesh(wGeo, waterMat);
+    waterTile.position.set(ox, WATER_Y, oz);
+    waterTile.castShadow = false;
+    waterTile.receiveShadow = false;
+    scene.add(waterTile);
+    chunk.meshes.push(waterTile);
+    chunk.uniqueGeos.push(wGeo);
+    chunk.waterMesh = waterTile;
+    chunk.waterGeo = wGeo;
+    chunk.waterRes = wRes;
+  }
 
   function buildChunkGrass(chunk) {
     const cx = chunk.cx;
@@ -1305,34 +1691,42 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     const uniqueGeos = [geo];
     const colliders = [];
 
-    // --- chunk water tile with baked bed height ---
-    if (minH < WATER_Y + 1.0) {
-      const wGeo = new THREE.PlaneGeometry(CHUNK, CHUNK, WRES, WRES);
-      wGeo.rotateX(-Math.PI / 2);
-      const wPos = wGeo.attributes.position;
-      const bedHeights = new Float32Array(wPos.count);
-      for (let i = 0; i < wPos.count; i++) {
-        const wx = wPos.getX(i) + ox;
-        const wz = wPos.getZ(i) + oz;
-        bedHeights[i] = heightAt(wx, wz);
-      }
-      wGeo.setAttribute('aBedHeight', new THREE.BufferAttribute(bedHeights, 1));
-      const waterTile = new THREE.Mesh(wGeo, waterMat);
-      waterTile.position.set(ox, WATER_Y, oz);
-      waterTile.castShadow = false;
-      waterTile.receiveShadow = false;
-      scene.add(waterTile);
-      meshes.push(waterTile);
-      uniqueGeos.push(wGeo);
+    const chunk = {
+      cx,
+      cz,
+      meshes,
+      grassMeshes: [],
+      uniqueGeos,
+      colliders,
+      hasDryLand: maxH > WATER_Y + 1.1,
+      hasWater: minH < WATER_Y + 1.0,
+      waterMesh: null,
+      waterGeo: null,
+      waterRes: 0,
+      grassDirty: false,
+      disposed: false,
+    };
+
+    // --- chunk water tile with baked bed height & quality-scaled Gerstner grid ---
+    if (chunk.hasWater) {
+      buildChunkWaterTile(chunk);
     }
 
     // --- sculpted props & spatial colliders strictly inside chunk bounds ---
     const byType = {
       pine: [],
       tree: [],
+      birch: [],
+      willow: [],
+      palm: [],
       cactus: [],
       pineSnow: [],
+      bush: [],
       rock: [],
+      boulderRock: [],
+      fallenLog: [],
+      stump: [],
+      lilypad: [],
       runeStone: [],
       kelp: [],
       fern: [],
@@ -1368,38 +1762,84 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
           terrainNormalAt(x, z, _tmpNorm);
           if (_tmpNorm.y < 0.70) continue;
 
+          const oasisDist = Math.hypot((x + 76) / 18, (z + 14) / 15);
+          const nearOasisWater = oasisDist < 1.35 && h < WATER_Y + 4.4;
+          const nearWarmShore = h < WATER_Y + 2.8 && c.snow < 0.15 && (c.desert > 0.15 || (x > 16 && z > 34 && z < 84));
+          const nearLushShore = h < WATER_Y + 3.5 && c.desert < 0.45 && c.snow < 0.35;
+          const birchPatch = noise2(x * 0.025 - 41, z * 0.025 + 67);
+
           const p1 = c.forest * 0.14;
-          const p2 = p1 + c.meadow * 0.036;
-          const p3 = p2 + c.desert * 0.052;
-          const p4 = p3 + c.snow * 0.055;
+          const p2 = p1 + c.meadow * 0.042;
+          const p3 = p2 + (nearOasisWater ? 0.18 : (nearWarmShore ? 0.055 : 0));
+          const p4 = p3 + (nearLushShore ? 0.048 : 0);
+          const p5 = p4 + (nearOasisWater ? 0 : c.desert * 0.052);
+          const p6 = p5 + c.snow * 0.055;
 
           if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p1) {
             byType.pine.push({ x, y: h - 0.08, z, s: treeS });
             colliders.push({ x, z, r: 0.42 * treeS, topY: h + 11.4 * treeS, standable: false });
             byType.fern.push({ x: x + (hash2(x, z + 3) - 0.5) * 1.6, y: h - 0.03, z: z + (hash2(x + 3, z) - 0.5) * 1.6, s: 0.75 + sRand * 0.45 });
           } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p2) {
-            byType.tree.push({ x, y: h - 0.08, z, s: treeS });
-            colliders.push({ x, z, r: 0.48 * treeS, topY: h + 9.8 * treeS, standable: false });
+            if (birchPatch > 0.50) {
+              byType.birch.push({ x, y: h - 0.08, z, s: treeS });
+              colliders.push({ x, z, r: 0.44 * treeS, topY: h + 9.2 * treeS, standable: false });
+            } else {
+              byType.tree.push({ x, y: h - 0.08, z, s: treeS });
+              colliders.push({ x, z, r: 0.48 * treeS, topY: h + 9.8 * treeS, standable: false });
+            }
             byType.fern.push({ x: x + (hash2(x, z + 7) - 0.5) * 1.7, y: h - 0.03, z: z + (hash2(x + 7, z) - 0.5) * 1.7, s: 0.72 + sRand * 0.42 });
           } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p3) {
-            byType.cactus.push({ x, y: h - 0.05, z, s });
-            colliders.push({ x, z, r: 0.44 * s, topY: h + 2.35 * s, standable: false });
+            byType.palm.push({ x, y: h - 0.08, z, s: treeS });
+            colliders.push({ x, z, r: 0.40 * treeS, topY: h + 8.4 * treeS, standable: false });
           } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p4) {
+            byType.willow.push({ x, y: h - 0.08, z, s: treeS });
+            colliders.push({ x, z, r: 0.58 * treeS, topY: h + 8.8 * treeS, standable: false });
+          } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p5) {
+            byType.cactus.push({ x, y: h - 0.05, z, s });
+            colliders.push({ x, z, r: 0.65 * s, topY: h + 1.85 * s, standable: false });
+          } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.78 && r < p6) {
             byType.pineSnow.push({ x, y: h - 0.08, z, s: treeS });
             colliders.push({ x, z, r: 0.42 * treeS, topY: h + 11.4 * treeS, standable: false });
           } else if (!onTrail && !onPlaza && r > 0.992) {
             byType.runeStone.push({ x, y: h - 0.08, z, s });
             colliders.push({ x, z, r: 0.52 * s, topY: h + 2.25 * s, standable: true });
           } else if (!onTrail && !onPlaza && r > 0.968) {
-            byType.rock.push({ x, y: h - 0.08, z, s });
-            colliders.push({ x, z, r: 0.85 * s, topY: h + 0.94 * s, standable: true });
-          } else if (!onTrail && (c.forest > 0.35 || c.meadow > 0.45) && r > 0.86 && r <= 0.955) {
+            if (c.desert > 0.30 || c.snow > 0.30 || h < WATER_Y + 2.2) {
+              byType.boulderRock.push({ x, y: h - 0.08, z, s });
+              colliders.push({ x, z, r: 0.82 * s, topY: h + 1.28 * s, standable: true });
+            } else {
+              byType.rock.push({ x, y: h - 0.08, z, s });
+              colliders.push({ x, z, r: 0.54 * s, topY: h + 1.35 * s, standable: true });
+            }
+          } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.84 && (c.forest > 0.28 || c.meadow > 0.40) && r > 0.958) {
+            byType.stump.push({ x, y: h - 0.06, z, s });
+            colliders.push({ x, z, r: 0.72 * s, topY: h + 0.90 * s, standable: true });
+          } else if (!onTrail && !onPlaza && _tmpNorm.y >= 0.86 && (c.forest > 0.28 || (c.meadow > 0.45 && h > WATER_Y + 2.0)) && r > 0.946) {
+            byType.fallenLog.push({ x, y: h - 0.06, z, s });
+            const logYaw = hash2(x, z) * Math.PI * 2;
+            const sinY = Math.sin(logYaw);
+            const cosY = Math.cos(logYaw);
+            for (let k = -1; k <= 1; k++) {
+              colliders.push({
+                x: x + sinY * k * 0.92 * s,
+                z: z + cosY * k * 0.92 * s,
+                r: 0.52 * s,
+                topY: h + 0.78 * s,
+                standable: true,
+              });
+            }
+          } else if (!onTrail && (c.forest > 0.35 || c.meadow > 0.45) && r > 0.86 && r <= 0.946) {
             // Broadleaf forest ferns & meadow shrubs
             byType.fern.push({ x, y: h - 0.03, z, s: 0.65 + sRand * 0.58 });
+          } else if (!onTrail && (c.meadow > 0.30 || c.forest > 0.24) && c.snow < 0.30 && c.desert < 0.35 && r > 0.79 && r <= 0.86) {
+            byType.bush.push({ x, y: h - 0.04, z, s: 0.80 + sRand * 0.45 });
           }
         } else if (h >= WATER_Y - 0.35 && h <= WATER_Y + 0.58 && !onTrail && r < 0.24) {
           // Coastal shoreline marsh reeds
           byType.reed.push({ x, y: h - 0.04, z, s: 0.78 + sRand * 0.52 });
+        } else if (h >= WATER_Y - 1.75 && h < WATER_Y - 0.22 && !onTrail && !onPlaza && c.snow < 0.45 && r < 0.36) {
+          // Calm shallow cove & oasis lilypads
+          byType.lilypad.push({ x, y: WATER_Y + 0.02, z, s: 0.78 + sRand * 0.52 });
         } else if (h < WATER_Y - 2.6 && r < 0.15) {
           const baseY = h - 0.05;
           const maxScale = Math.max(0.35, (WATER_Y - 0.55 - baseY) / 3.3);
@@ -1409,22 +1849,75 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     }
 
     if (byType.tree.length) {
-      meshes.push(makeInstances('trunk', byType.tree, 1.0, true, true, _tintNeutral));
-      meshes.push(makeInstances('oakCanopy', byType.tree, 1.0, true, true, _tintOak));
+      const trunkMesh = makeInstances('trunk', byType.tree, 1.0, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('oakCanopy', byType.tree, 1.0, true, true, _tintOak);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('tree', trunkMesh, chunk, [canopyMesh]);
+    }
+    if (byType.birch.length) {
+      const trunkMesh = makeInstances('birchTrunk', byType.birch, 1.0, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('birchCanopy', byType.birch, 1.0, true, true, _tintBirch);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('birch', trunkMesh, chunk, [canopyMesh]);
     }
     if (byType.pine.length) {
-      meshes.push(makeInstances('trunk', byType.pine, 0.85, true, true, _tintNeutral));
-      meshes.push(makeInstances('pineCanopy', byType.pine, 1.0, true, true, _tintPine));
+      const trunkMesh = makeInstances('trunk', byType.pine, 0.85, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('pineCanopy', byType.pine, 1.0, true, true, _tintPine);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('pine', trunkMesh, chunk, [canopyMesh]);
     }
     if (byType.pineSnow.length) {
-      meshes.push(makeInstances('trunk', byType.pineSnow, 0.85, true, true, _tintNeutral));
-      meshes.push(makeInstances('pineSnowCanopy', byType.pineSnow, 1.0, true, true, _tintNeutral));
+      const trunkMesh = makeInstances('trunk', byType.pineSnow, 0.85, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('pineSnowCanopy', byType.pineSnow, 1.0, true, true, _tintNeutral);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('pineSnow', trunkMesh, chunk, [canopyMesh]);
+    }
+    if (byType.willow.length) {
+      const trunkMesh = makeInstances('trunk', byType.willow, 0.90, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('willowCanopy', byType.willow, 1.0, true, true, _tintWillow);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('willow', trunkMesh, chunk, [canopyMesh]);
+    }
+    if (byType.palm.length) {
+      const trunkMesh = makeInstances('palmTrunk', byType.palm, 1.0, true, true, _tintNeutral);
+      const canopyMesh = makeInstances('palmCanopy', byType.palm, 1.0, true, true, _tintPalm);
+      meshes.push(trunkMesh, canopyMesh);
+      registerPropSwap('palm', trunkMesh, chunk, [canopyMesh]);
     }
     if (byType.cactus.length) {
-      meshes.push(makeInstances('cactus', byType.cactus, 1.0, true, true, _tintNeutral));
+      const m = makeInstances('cactus', byType.cactus, 1.0, true, true, _tintNeutral);
+      meshes.push(m);
+      registerPropSwap('cactus', m, chunk, null);
+    }
+    if (byType.bush.length) {
+      const m = makeInstances('bush', byType.bush, 1.0, true, true, _tintOak, true);
+      meshes.push(m);
+      registerPropSwap('bush', m, chunk, null);
     }
     if (byType.rock.length) {
-      meshes.push(makeInstances('rock', byType.rock, 1.0, true, true, _tintNeutral));
+      const m = makeInstances('rock', byType.rock, 1.0, true, true, _tintNeutral);
+      meshes.push(m);
+      registerPropSwap('rock', m, chunk, null);
+    }
+    if (byType.boulderRock.length) {
+      const m = makeInstances('boulderRock', byType.boulderRock, 1.0, true, true, _tintNeutral);
+      meshes.push(m);
+      registerPropSwap('boulderRock', m, chunk, null);
+    }
+    if (byType.fallenLog.length) {
+      const m = makeInstances('fallenLog', byType.fallenLog, 1.0, true, true, _tintNeutral, true);
+      meshes.push(m);
+      registerPropSwap('fallenLog', m, chunk, null);
+    }
+    if (byType.stump.length) {
+      const m = makeInstances('stump', byType.stump, 1.0, true, true, _tintNeutral, true);
+      meshes.push(m);
+      registerPropSwap('stump', m, chunk, null);
+    }
+    if (byType.lilypad.length) {
+      const m = makeInstances('lilypad', byType.lilypad, 1.0, false, true, _tintNeutral, true);
+      meshes.push(m);
+      registerPropSwap('lilypad', m, chunk, null);
     }
     if (byType.runeStone.length) {
       meshes.push(makeInstances('runeStone', byType.runeStone, 1.0, true, true, _tintNeutral));
@@ -1438,17 +1931,6 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     if (byType.reed.length) {
       meshes.push(makeInstances('reed', byType.reed, 1.0, false, true, _tintNeutral));
     }
-
-    const chunk = {
-      cx,
-      cz,
-      meshes,
-      grassMeshes: [],
-      uniqueGeos,
-      colliders,
-      hasDryLand: maxH > WATER_Y + 1.1,
-      grassDirty: false,
-    };
 
     buildChunkGrass(chunk);
     chunks.set(chunkKey(cx, cz), chunk);
@@ -1492,8 +1974,11 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
 
     // Unload distant chunks and dispose ONLY chunk-unique geometries
     _unloadKeys.length = 0;
+    const hasUnreg = typeof Env !== 'undefined' && Env && typeof Env.unregisterChunk === 'function';
     for (const [key, chunk] of chunks) {
       if (Math.abs(chunk.cx - pcx) > VIEW_RADIUS + 1 || Math.abs(chunk.cz - pcz) > VIEW_RADIUS + 1) {
+        chunk.disposed = true;
+        if (hasUnreg) Env.unregisterChunk(chunk);
         for (let i = 0; i < chunk.meshes.length; i++) {
           scene.remove(chunk.meshes[i]);
         }
@@ -1517,6 +2002,10 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     if (next === qualityMode) return qualityMode;
     qualityMode = next;
 
+    if (typeof Env !== 'undefined' && Env && typeof Env.setQuality === 'function') {
+      Env.setQuality(next);
+    }
+
     const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
     renderer.setPixelRatio(Math.min(dpr, next === 'high' ? 2 : 1.25));
 
@@ -1538,6 +2027,9 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       }
       chunk.grassMeshes.length = 0;
       chunk.grassDirty = chunk.hasDryLand;
+      if (chunk.hasWater) {
+        buildChunkWaterTile(chunk);
+      }
     }
 
     return qualityMode;
@@ -1729,55 +2221,127 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   const _skyMid = SKY.darkMid.clone();
   const _skyBot = SKY.darkBot.clone();
   const _fogColor = SKY.darkBot.clone();
+  const _shadowLightDir = _sunDir.clone();
   const _playerPos = new THREE.Vector3();
   const _camPos = new THREE.Vector3();
   const _lightUpRef = new THREE.Vector3(0, 1, 0);
   const _lightRight = new THREE.Vector3(1, 0, 0);
   const _lightUp = new THREE.Vector3(0, 1, 0);
+  const _envCtx = {
+    px: 0,
+    py: 0,
+    pz: 0,
+    camX: 0,
+    camY: 0,
+    camZ: 0,
+    waterY: WATER_Y,
+    regionId: '',
+    underwater: false,
+  };
 
   let skyProgress = 0;
+  let _litCount = 0;
+  let _lastEnvProgress = -1;
   let underwater = false;
+  const _hasEnv = typeof Env !== 'undefined' && Env;
 
   getSkyProgress = () => skyProgress;
 
   function syncLightBasis() {
-    _lightRight.crossVectors(_lightUpRef, _sunDir).normalize();
-    _lightUp.crossVectors(_sunDir, _lightRight).normalize();
+    _lightRight.crossVectors(_lightUpRef, _shadowLightDir);
+    if (_lightRight.lengthSq() < 1e-6) _lightRight.set(1, 0, 0);
+    _lightRight.normalize();
+    _lightUp.crossVectors(_shadowLightDir, _lightRight).normalize();
   }
   syncLightBasis();
 
-  setSkyProgress = function setSkyProgressImpl(lit) {
-    const p = Math.min(1, Math.max(0, lit / DAY_SKY_MAX_LIT));
-    skyProgress = p;
+  function applyCelestialState(cel) {
+    if (!cel) return;
+    if (cel.skyTop) _skyTop.copy(cel.skyTop);
+    if (cel.skyMid) _skyMid.copy(cel.skyMid);
+    if (cel.skyBot) _skyBot.copy(cel.skyBot);
+    if (cel.hemiSky && hemiLight.color) hemiLight.color.copy(cel.hemiSky);
+    if (cel.hemiGround && hemiLight.groundColor) hemiLight.groundColor.copy(cel.hemiGround);
+    if (typeof cel.hemiIntensity === 'number') hemiLight.intensity = cel.hemiIntensity;
+    if (cel.sunColor && sun.color) sun.color.copy(cel.sunColor);
+    if (typeof cel.sunIntensity === 'number') sun.intensity = cel.sunIntensity;
+    if (cel.sunDir) _sunDir.copy(cel.sunDir).normalize();
+    if (cel.shadowDir) {
+      _shadowLightDir.copy(cel.shadowDir).normalize();
+    } else if (cel.sunDir) {
+      _shadowLightDir.copy(_sunDir);
+    }
+    if (typeof cel.dayProgress === 'number') {
+      skyProgress = cel.dayProgress < 0 ? 0 : (cel.dayProgress > 1 ? 1 : cel.dayProgress);
+    }
+    syncLightBasis();
+    sun.position.set(
+      sun.target.position.x + _shadowLightDir.x * 75,
+      sun.target.position.y + _shadowLightDir.y * 75,
+      sun.target.position.z + _shadowLightDir.z * 75
+    );
+  }
 
-    if (p <= 0.5) {
-      const t = p * 2;
-      _skyTop.copy(SKY.darkTop).lerp(SKY.dawnTop, t);
-      _skyMid.copy(SKY.darkMid).lerp(SKY.dawnMid, t);
-      _skyBot.copy(SKY.darkBot).lerp(SKY.dawnBot, t);
-      hemiLight.color.copy(SKY.hemiSkyDark).lerp(SKY.hemiSkyDawn, t);
-      sun.color.copy(SKY.sunDark).lerp(SKY.sunDawn, t);
-    } else {
-      const t = (p - 0.5) * 2;
-      _skyTop.copy(SKY.dawnTop).lerp(SKY.dayTop, t);
-      _skyMid.copy(SKY.dawnMid).lerp(SKY.dayMid, t);
-      _skyBot.copy(SKY.dawnBot).lerp(SKY.dayBot, t);
-      hemiLight.color.copy(SKY.hemiSkyDawn).lerp(SKY.hemiSkyDay, t);
-      sun.color.copy(SKY.sunDawn).lerp(SKY.sunDay, t);
+  setSkyProgress = function setSkyProgressImpl(lit) {
+    _litCount = lit;
+    const p = Math.min(1, Math.max(0, lit / DAY_SKY_MAX_LIT));
+    let cel = null;
+    if (_hasEnv) {
+      if (typeof Env.setSkyProgress === 'function') {
+        cel = Env.setSkyProgress(lit);
+      }
+      if (!cel && typeof Env.getCelestialState === 'function') {
+        cel = Env.getCelestialState();
+      }
+      if (!cel && typeof Env.computeCelestialState === 'function') {
+        cel = Env.computeCelestialState(lit, 0);
+      }
+      if (cel && typeof Env.setSkyProgress !== 'function' && typeof Shaders !== 'undefined' && typeof Shaders.setCelestial === 'function' && cel.moonDir) {
+        Shaders.setCelestial(cel.moonDir, cel.moonColor, cel.nightFactor);
+      }
     }
 
-    // Sky begins almost completely starless (0.03) and blazes back to life with every relit Totem!
-    // Strong sunlit contrast (warm golden sun vs. deeper cool shadows) once day returns!
-    skyStarMat.opacity = Math.min(1, 0.03 + lit * 0.125);
-    hemiLight.intensity = 0.20 + p * 0.44;
-    hemiLight.groundColor.copy(SKY.hemiGndDark).lerp(SKY.hemiGndDay, p);
+    if (cel) {
+      applyCelestialState(cel);
+    } else {
+      skyProgress = p;
 
-    sun.intensity = 0.25 + p * 1.58;
-    _sunDir.set(0.48, 0.34 + p * 0.44, 0.38).normalize();
-    syncLightBasis();
+      if (p <= 0.5) {
+        const t = p * 2;
+        _skyTop.copy(SKY.darkTop).lerp(SKY.dawnTop, t);
+        _skyMid.copy(SKY.darkMid).lerp(SKY.dawnMid, t);
+        _skyBot.copy(SKY.darkBot).lerp(SKY.dawnBot, t);
+        hemiLight.color.copy(SKY.hemiSkyDark).lerp(SKY.hemiSkyDawn, t);
+        sun.color.copy(SKY.sunDark).lerp(SKY.sunDawn, t);
+      } else {
+        const t = (p - 0.5) * 2;
+        _skyTop.copy(SKY.dawnTop).lerp(SKY.dayTop, t);
+        _skyMid.copy(SKY.dawnMid).lerp(SKY.dayMid, t);
+        _skyBot.copy(SKY.dawnBot).lerp(SKY.dayBot, t);
+        hemiLight.color.copy(SKY.hemiSkyDawn).lerp(SKY.hemiSkyDay, t);
+        sun.color.copy(SKY.sunDawn).lerp(SKY.sunDay, t);
+      }
 
+      // Sky begins almost completely starless (0.03) and blazes back to life with every relit Totem!
+      // Strong sunlit contrast (warm golden sun vs. deeper cool shadows) once day returns!
+      skyStarMat.opacity = Math.min(1, 0.03 + lit * 0.125);
+      hemiLight.intensity = 0.20 + p * 0.44;
+      hemiLight.groundColor.copy(SKY.hemiGndDark).lerp(SKY.hemiGndDay, p);
+
+      sun.intensity = 0.25 + p * 1.58;
+      _sunDir.set(0.48, 0.34 + p * 0.44, 0.38).normalize();
+      _shadowLightDir.copy(_sunDir);
+      syncLightBasis();
+      sun.position.set(
+        sun.target.position.x + _shadowLightDir.x * 75,
+        sun.target.position.y + _shadowLightDir.y * 75,
+        sun.target.position.z + _shadowLightDir.z * 75
+      );
+    }
+
+    _lastEnvProgress = skyProgress;
     if (typeof Textures !== 'undefined' && typeof Textures.updateEnvMap === 'function') {
-      Textures.updateEnvMap(renderer, scene, _skyTop, _skyBot, _sunDir, p);
+      Textures.updateEnvMap(renderer, scene, _skyTop, _skyBot, _shadowLightDir, skyProgress);
     }
   };
 
@@ -1790,14 +2354,59 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     );
   }
 
+  if (_hasEnv) {
+    if (typeof Env.initScene === 'function') {
+      Env.initScene(scene, {
+        THREE,
+        Shaders: typeof Shaders !== 'undefined' ? Shaders : null,
+        Textures: typeof Textures !== 'undefined' ? Textures : null,
+      });
+      constellations.visible = false;
+      skyStarMat.opacity = 0;
+    }
+    if (typeof Env.preloadAll === 'function') {
+      Env.preloadAll({
+        THREE,
+        Shaders: typeof Shaders !== 'undefined' ? Shaders : null,
+        Textures: typeof Textures !== 'undefined' ? Textures : null,
+      });
+    }
+  }
+
   setSkyProgress(0);
 
-  updateEnvironment = function updateEnvironmentImpl(camY, px, pz, time, dt) {
+  updateEnvironment = function updateEnvironmentImpl(camY, px, pz, time, dt, regionId) {
     const t = time || 0;
+    const stepDt = dt || 0;
     const py = typeof P !== 'undefined' && P && typeof P.y === 'number' ? P.y : heightAt(px, pz);
+    const nowUnder = camY < WATER_Y - 0.1;
+
+    if (_hasEnv && typeof Env.update === 'function') {
+      _envCtx.px = px;
+      _envCtx.py = py;
+      _envCtx.pz = pz;
+      _envCtx.camX = camera.position.x;
+      _envCtx.camY = camY;
+      _envCtx.camZ = camera.position.z;
+      _envCtx.waterY = WATER_Y;
+      _envCtx.regionId = regionId || '';
+      _envCtx.underwater = nowUnder;
+      Env.update(stepDt, t, _envCtx);
+
+      const cel = typeof Env.getCelestialState === 'function' ? Env.getCelestialState() : null;
+      if (cel) {
+        applyCelestialState(cel);
+        if (_litCount >= DAY_SKY_MAX_LIT && Math.abs(skyProgress - _lastEnvProgress) >= 0.12) {
+          _lastEnvProgress = skyProgress;
+          if (typeof Textures !== 'undefined' && typeof Textures.updateEnvMap === 'function') {
+            Textures.updateEnvMap(renderer, scene, _skyTop, _skyBot, _shadowLightDir, skyProgress);
+          }
+        }
+      }
+    }
 
     skyDome.position.set(px, 0, pz);
-    constellations.position.set(px, 0, pz);
+    if (constellations.visible) constellations.position.set(px, 0, pz);
     skyConstellations.position.set(px, 0, pz);
 
     const pcx = Math.floor((px + HALF_CHUNK) / CHUNK);
@@ -1811,22 +2420,21 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       c.lineMatC.opacity = 0.45 + pulse;
     }
 
-    // Light-space texel-snapped directional shadow camera preserves full 3D depth along _sunDir
+    // Light-space texel-snapped directional shadow camera preserves full 3D depth along _shadowLightDir
     const shadowMapDim = sun.shadow.mapSize.x || 1024;
     const texelSize = SUN_SHADOW_SPAN / shadowMapDim;
     const u = px * _lightRight.x + py * _lightRight.y + pz * _lightRight.z;
     const v = px * _lightUp.x + py * _lightUp.y + pz * _lightUp.z;
-    const w = px * _sunDir.x + py * _sunDir.y + pz * _sunDir.z;
+    const w = px * _shadowLightDir.x + py * _shadowLightDir.y + pz * _shadowLightDir.z;
     const su = Math.round(u / texelSize) * texelSize;
     const sv = Math.round(v / texelSize) * texelSize;
-    const tx = su * _lightRight.x + sv * _lightUp.x + w * _sunDir.x;
-    const ty = su * _lightRight.y + sv * _lightUp.y + w * _sunDir.y;
-    const tz = su * _lightRight.z + sv * _lightUp.z + w * _sunDir.z;
+    const tx = su * _lightRight.x + sv * _lightUp.x + w * _shadowLightDir.x;
+    const ty = su * _lightRight.y + sv * _lightUp.y + w * _shadowLightDir.y;
+    const tz = su * _lightRight.z + sv * _lightUp.z + w * _shadowLightDir.z;
     sun.target.position.set(tx, ty, tz);
     sun.target.updateMatrixWorld();
-    sun.position.set(tx + _sunDir.x * 75, ty + _sunDir.y * 75, tz + _sunDir.z * 75);
+    sun.position.set(tx + _shadowLightDir.x * 75, ty + _shadowLightDir.y * 75, tz + _shadowLightDir.z * 75);
 
-    const nowUnder = camY < WATER_Y - 0.1;
     if (nowUnder !== underwater) {
       underwater = nowUnder;
       if (typeof Sound !== 'undefined' && typeof Sound.setMuffled === 'function') {

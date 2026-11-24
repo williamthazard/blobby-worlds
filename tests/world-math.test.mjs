@@ -163,7 +163,18 @@ function makeMockThree() {
       this.z = 0;
       this.w = 1;
     }
+    identity() {
+      this.x = 0; this.y = 0; this.z = 0; this.w = 1;
+      return this;
+    }
+    copy(q) {
+      this.x = q.x; this.y = q.y; this.z = q.z; this.w = q.w;
+      return this;
+    }
     setFromEuler() {
+      return this;
+    }
+    setFromUnitVectors() {
       return this;
     }
   }
@@ -264,6 +275,9 @@ function makeMockThree() {
     }
     setIndex(idx) {
       this.index = Array.isArray(idx) ? new BufferAttribute(new Uint16Array(idx), 1) : idx;
+      return this;
+    }
+    setDrawRange() {
       return this;
     }
     rotateX(angle) {
@@ -588,6 +602,11 @@ function makeMockThree() {
       Object.assign(this, opts);
     }
   }
+  class MeshBasicMaterial {
+    constructor(opts = {}) {
+      Object.assign(this, opts);
+    }
+  }
   class ShaderMaterial {
     constructor(opts = {}) {
       Object.assign(this, opts);
@@ -665,6 +684,7 @@ function makeMockThree() {
     HemisphereLight,
     DirectionalLight,
     MeshStandardMaterial,
+    MeshBasicMaterial,
     ShaderMaterial,
     PointsMaterial,
     LineBasicMaterial,
@@ -1078,4 +1098,430 @@ test('chunk streaming, water aBedHeight, grass uvs, colliders, quality, and envi
   if (land) assert.ok(land.h >= 0.6);
   const sea = W.waterSpot(0, 0, 5, 160);
   if (sea) assert.ok(sea.h <= W.WATER_Y - 1.6);
+});
+
+function loadFullWorldWithEnvMocks() {
+  const code = fs.readFileSync(new URL('../world.js', import.meta.url), 'utf8');
+  const THREE = makeMockThree();
+  const envCalls = [];
+  const shaderUpdates = [];
+  const foliagePatches = [];
+  const treeWindPatches = [];
+  const initSceneCalls = [];
+  const preloadAllCalls = [];
+  const setSkyCalls = [];
+  const setQualityCalls = [];
+  const updateCalls = [];
+  const swapCalls = [];
+  const unregisterCalls = [];
+
+  const celState = {
+    sunDir: new THREE.Vector3(0.88, -0.26, 0.28).normalize(),
+    moonDir: new THREE.Vector3(-0.38, 0.72, -0.32).normalize(),
+    shadowDir: new THREE.Vector3(-0.38, 0.72, -0.32).normalize(),
+    sunColor: new THREE.Color(0x7ea6e4),
+    moonColor: new THREE.Color(0x9abcf5),
+    skyTop: new THREE.Color(0x050918),
+    skyMid: new THREE.Color(0x0d1732),
+    skyBot: new THREE.Color(0x1a284a),
+    hemiSky: new THREE.Color(0x2e4875),
+    hemiGround: new THREE.Color(0x0e151c),
+    sunIntensity: 0.5,
+    hemiIntensity: 0.24,
+    shadowStrength: 1.0,
+    nightFactor: 1.0,
+    starAlpha: 1.0,
+    dayProgress: 0.0,
+    lit: 0,
+    cycleTime: 0,
+  };
+
+  let mockLit = 0;
+  let mockCycle = 0;
+  const Env = {
+    PROP_KEYS: [
+      'oak_tree', 'birch_tree', 'pine_tree', 'pine_snow', 'willow_tree', 'palm_tree',
+      'cactus_flower', 'bush_berry', 'boulder_moss', 'boulder_rock', 'fallen_log',
+      'tree_stump', 'lilypad', 'ruin_arch', 'ruin_column', 'ruin_column_broken', 'shrine_pedestal',
+    ],
+    initScene(sc, deps) {
+      initSceneCalls.push({ sc, deps });
+      return { scene: sc };
+    },
+    preloadAll(deps) {
+      preloadAllCalls.push(deps);
+    },
+    computeCelestialState(lit, cycleTime = 0) {
+      mockLit = lit;
+      mockCycle = cycleTime;
+      const p = Math.min(1, Math.max(0, lit / 8));
+      if (lit < 8) {
+        celState.sunDir.set(0.88 * (1 - p) + 0.45 * p, -0.26 + p * 1.04, 0.28 + p * 0.08).normalize();
+        celState.moonDir.set(-0.38, 0.72 - p * 1.46, -0.32).normalize();
+        celState.nightFactor = 1 - p;
+        celState.dayProgress = p;
+      } else {
+        const ang = (cycleTime / 720) * Math.PI * 2;
+        celState.sunDir.set(0.45 * Math.cos(ang) - 0.82 * Math.sin(ang), 0.78 * Math.cos(ang), 0.36 * Math.cos(ang)).normalize();
+        celState.moonDir.set(-0.45 * Math.cos(ang) + 0.72 * Math.sin(ang), -0.74 * Math.cos(ang), -0.36 * Math.cos(ang)).normalize();
+        celState.nightFactor = celState.sunDir.y < 0 ? 1 : 0;
+        celState.dayProgress = Math.max(0, Math.min(1, (celState.sunDir.y + 0.3) / 0.7));
+      }
+      celState.shadowDir.copy(celState.sunDir.y >= 0 ? celState.sunDir : celState.moonDir);
+      if (celState.shadowDir.y < 0.12) celState.shadowDir.y = 0.12;
+      celState.shadowDir.normalize();
+      celState.lit = lit;
+      celState.cycleTime = cycleTime;
+      return celState;
+    },
+    setSkyProgress(lit) {
+      setSkyCalls.push(lit);
+      return this.computeCelestialState(lit, lit >= 8 ? 0 : mockCycle);
+    },
+    getCelestialState() {
+      return celState;
+    },
+    setQuality(mode) {
+      setQualityCalls.push(mode);
+      return mode;
+    },
+    update(dt, time, ctx) {
+      updateCalls.push({ dt, time, px: ctx.px, py: ctx.py, pz: ctx.pz, camY: ctx.camY, underwater: ctx.underwater });
+      if (mockLit >= 8) {
+        mockCycle += dt || 0;
+        this.computeCelestialState(mockLit, mockCycle);
+      }
+    },
+    registerInstancedSwap(key, target, opts) {
+      swapCalls.push({ key, target, opts });
+      return { key, target, opts };
+    },
+    unregisterChunk(chunk) {
+      unregisterCalls.push(chunk);
+    },
+  };
+
+  const Textures = {
+    sets: {
+      grass: { map: {}, normalMap: {}, roughnessMap: {} },
+      forest: { map: {}, normalMap: {}, roughnessMap: {} },
+      sand: { map: {}, normalMap: {}, roughnessMap: {} },
+      snow: { map: {}, normalMap: {}, roughnessMap: {} },
+      rock: { map: {}, normalMap: {}, roughnessMap: {} },
+      bark: { map: {}, normalMap: {}, roughnessMap: {} },
+      leaves: { map: {}, normalMap: {}, roughnessMap: {} },
+      stone: { map: {}, normalMap: {}, roughnessMap: {} },
+      waterNormal: { normalMap: {} },
+    },
+    oakLeafCard: {},
+    pineBoughCard: {},
+    pineSnowBoughCard: {},
+    fernCard: {},
+    init() {},
+    updateEnvMap(renderer, scene, topColor, botColor, sunDir, progress) {
+      envCalls.push({ renderer, scene, topColor, botColor, sunDir, progress });
+    },
+  };
+
+  const Shaders = {
+    createTerrainMaterial: () => new THREE.MeshStandardMaterial({ name: 'terrainShaderMat' }),
+    createWaterMaterial: () => new THREE.ShaderMaterial({ name: 'waterShaderMat' }),
+    createHorizonWaterMaterial: () => new THREE.ShaderMaterial({ name: 'horizonShaderMat' }),
+    createGrassMaterial: () => new THREE.MeshStandardMaterial({ vertexColors: true, name: 'grassShaderMat' }),
+    createKelpMaterial: () => new THREE.MeshStandardMaterial({ name: 'kelpShaderMat' }),
+    createSkyDome: () => ({
+      mesh: new THREE.Mesh(new THREE.SphereGeometry(460, 16, 12), new THREE.ShaderMaterial()),
+      material: new THREE.ShaderMaterial(),
+    }),
+    patchTreeWind(mat, isFoliage) {
+      treeWindPatches.push({ mat, isFoliage });
+      return mat;
+    },
+    patchFoliageReactive(mat, opts) {
+      foliagePatches.push({ mat, opts });
+      return mat;
+    },
+    setCelestial() {},
+    update(time, playerPos, camPos, sunDir, progress, skyTop, skyMid, skyBot, fogColor, fogNear, fogFar) {
+      shaderUpdates.push({ time, playerPos, camPos, sunDir, progress, fogNear, fogFar });
+    },
+  };
+
+  // Load real Regions math from regions.js (without buildWorldLandmarks) so all 6 biomes exist deterministically
+  const regionsCode = fs.readFileSync(new URL('../regions.js', import.meta.url), 'utf8');
+  const regSandbox = { Math, Map, Set, Array, console };
+  vm.runInNewContext(regionsCode + '\nthis.__Regions = Regions;', regSandbox);
+  const Regions = {
+    getElevationMod: regSandbox.__Regions.getElevationMod,
+    getClimateMod: regSandbox.__Regions.getClimateMod,
+    getTrailWeight: regSandbox.__Regions.getTrailWeight,
+    regionAt: regSandbox.__Regions.regionAt,
+  };
+
+  const document = {
+    body: { appendChild() {} },
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return {
+            font: '', fillStyle: '', textAlign: '', textBaseline: '',
+            shadowColor: '', shadowBlur: 0, fillText() {},
+          };
+        },
+      };
+    },
+  };
+
+  const sandbox = {
+    Math, Map, Set, Array, Float32Array, Uint16Array, console,
+    THREE, Textures, Shaders, Env, Regions, document,
+    innerWidth: 1280, innerHeight: 720, devicePixelRatio: 2,
+    addEventListener() {},
+  };
+
+  vm.runInNewContext(
+    code +
+      '\nthis.__World = { WATER_Y, CHUNK, VIEW_RADIUS, DAY_SKY_MAX_LIT, scene, camera, renderer, sun, hemiLight, heightAt, terrainNormalAt, climateAt, surfaceAt, getNearbyColliders, updateChunks, setQuality, getQuality, setSkyProgress, updateEnvironment, chunks };',
+    sandbox
+  );
+
+  return {
+    W: sandbox.__World,
+    THREE,
+    Env,
+    celState,
+    initSceneCalls,
+    preloadAllCalls,
+    setSkyCalls,
+    setQualityCalls,
+    updateCalls,
+    swapCalls,
+    unregisterCalls,
+    foliagePatches,
+    treeWindPatches,
+    shaderUpdates,
+  };
+}
+
+test('World integrates Env celestial moonlight handoff, reactive bushes/ferns, expanded biome props, and GLB hot-swap safely', () => {
+  const {
+    W,
+    THREE,
+    celState,
+    initSceneCalls,
+    preloadAllCalls,
+    setSkyCalls,
+    setQualityCalls,
+    updateCalls,
+    swapCalls,
+    unregisterCalls,
+    foliagePatches,
+    shaderUpdates,
+  } = loadFullWorldWithEnvMocks();
+
+  // 1. Env boot hooks & legacy star suppression
+  assert.equal(initSceneCalls.length, 1, 'Env.initScene(scene, ...) must run once at boot');
+  assert.equal(initSceneCalls[0].sc, W.scene);
+  assert.equal(preloadAllCalls.length, 1, 'Env.preloadAll(...) must run once at boot');
+  const legacyStars = W.scene.children.find(o => o instanceof THREE.Points && o.material && o.material.size === 2.6);
+  assert.ok(legacyStars, 'Legacy starfield object should exist for non-Env fallback');
+  assert.equal(legacyStars.visible, false, 'Legacy square starfield points must hide when Env spectral starfield is active');
+
+  // 2. Reactive foliage shader patching on fern, reed, and bush (without corrupting grassMat)
+  assert.ok(foliagePatches.length >= 3, `Expected >=3 Shaders.patchFoliageReactive calls (fern, reed, bush), got ${foliagePatches.length}`);
+  assert.equal(foliagePatches.some(p => p.mat && p.mat.name === 'grassShaderMat'), false, 'reed reactive patch must NOT mutate shared grassMat');
+
+  // 3. Moonlit shadow handoff at lit=0 vs sunlit at lit=8 (always distance 75u)
+  W.setSkyProgress(0);
+  assert.ok(setSkyCalls.includes(0));
+  const vx0 = W.sun.position.x - W.sun.target.position.x;
+  const vy0 = W.sun.position.y - W.sun.target.position.y;
+  const vz0 = W.sun.position.z - W.sun.target.position.z;
+  const d0 = Math.hypot(vx0, vy0, vz0);
+  assert.ok(Math.abs(d0 - 75) < 1e-4, `lit=0 shadow light distance must be 75, got ${d0}`);
+  const dotMoon = (vx0 * celState.moonDir.x + vy0 * celState.moonDir.y + vz0 * celState.moonDir.z) / d0;
+  assert.ok(dotMoon > 0.98, `lit=0 shadow light must align with moonDir (dot=${dotMoon})`);
+
+  W.setSkyProgress(8);
+  const vx8 = W.sun.position.x - W.sun.target.position.x;
+  const vy8 = W.sun.position.y - W.sun.target.position.y;
+  const vz8 = W.sun.position.z - W.sun.target.position.z;
+  const d8 = Math.hypot(vx8, vy8, vz8);
+  assert.ok(Math.abs(d8 - 75) < 1e-4, `lit=8 shadow light distance must be 75, got ${d8}`);
+  const dotSun = (vx8 * celState.sunDir.x + vy8 * celState.sunDir.y + vz8 * celState.sunDir.z) / d8;
+  assert.ok(dotSun > 0.98, `lit=8 shadow light must align with sunDir (dot=${dotSun})`);
+
+  // 4. Env.update forwarded cleanly by updateEnvironment and live cycle shifts shadow light at 75u
+  W.updateEnvironment(3.5, 10, -8, 12.0, 0.016);
+  assert.equal(updateCalls.length, 1);
+  assert.equal(updateCalls[0].dt, 0.016);
+  assert.equal(updateCalls[0].time, 12.0);
+  assert.equal(updateCalls[0].px, 10);
+  assert.equal(updateCalls[0].pz, -8);
+  assert.ok(shaderUpdates.length >= 1);
+
+  // Advance half a 720s cycle (360s -> night in live cycle!) and confirm shadow light hands off back to moonDir at 75u
+  W.updateEnvironment(3.5, 10, -8, 372.0, 360.0);
+  const vxN = W.sun.position.x - W.sun.target.position.x;
+  const vyN = W.sun.position.y - W.sun.target.position.y;
+  const vzN = W.sun.position.z - W.sun.target.position.z;
+  const dN = Math.hypot(vxN, vyN, vzN);
+  assert.ok(Math.abs(dN - 75) < 1e-4, `Post-8/8 live night cycle shadow light distance must remain 75, got ${dN}`);
+  const dotLiveMoon = (vxN * celState.moonDir.x + vyN * celState.moonDir.y + vzN * celState.moonDir.z) / dN;
+  assert.ok(dotLiveMoon > 0.90, `Post-8/8 live night cycle should hand shadow light back to moonDir (dot=${dotLiveMoon})`);
+
+  // 5. Build chunks across all biomes (meadow, forest, coast cove, sunken bay, canyon oasis, frostpeak)
+  const sampleCenters = [
+    [0, 0],       // Star Sanctuary / meadow
+    [62, -78],    // Whispering Forest (pine, oak, birch, bush, fallenLog, stump, boulder_moss)
+    [36, 62],     // Twilight Coast cove (willow, palm, lilypad, boulder_rock)
+    [-86, -14],   // Canyon Oasis (cactus_flower, palm, willow, lilypad, boulder_rock)
+    [-68, -88],   // Frostpeak (pine_snow, boulder_rock)
+  ];
+  let standableCount = 0;
+  for (const [cx, cz] of sampleCenters) {
+    for (let i = 0; i < 12; i++) {
+      W.updateChunks(cx, cz);
+    }
+    for (const chunk of W.chunks.values()) {
+      for (const c of chunk.colliders) {
+        if (c.standable) {
+          standableCount++;
+          assert.ok(typeof c.topY === 'number' && Number.isFinite(c.topY));
+          assert.ok(c.r > 0.25 && c.r < 2.0);
+        }
+      }
+    }
+  }
+  assert.ok(unregisterCalls.length > 0, 'Moving across regions must unload distant chunks and call Env.unregisterChunk');
+  assert.ok(standableCount >= 5, `Expected standable boulder/log/stump colliders, got ${standableCount}`);
+
+  // Verify 24x24 water grid in high quality around Twilight Cove / Sunken Bay before switching to balanced
+  for (let i = 0; i < 12; i++) W.updateChunks(24, 64);
+  let sawHighWater = false;
+  for (const chunk of W.chunks.values()) {
+    for (const m of chunk.meshes) {
+      if (m.geometry && m.geometry.attributes && m.geometry.attributes.aBedHeight) {
+        assert.equal(m.geometry.attributes.aBedHeight.count, 625, 'High quality water tile must be 24x24 (625 vertices)');
+        sawHighWater = true;
+      }
+    }
+  }
+  assert.ok(sawHighWater, 'Must inspect at least one 24x24 water tile in high quality');
+
+  // 6. setQuality('balanced') forwards to Env.setQuality & shrinks water grid to 16x16 (289 vertices)
+  W.setQuality('balanced');
+  assert.ok(setQualityCalls.includes('balanced'), 'setQuality must forward mode to Env.setQuality');
+  let sawBalancedWater = false;
+  for (const chunk of W.chunks.values()) {
+    for (const m of chunk.meshes) {
+      if (m.geometry && m.geometry.attributes && m.geometry.attributes.aBedHeight) {
+        assert.equal(m.geometry.attributes.aBedHeight.count, 289, 'Balanced quality water tile must shrink to 16x16 (289 vertices)');
+        sawBalancedWater = true;
+      }
+    }
+  }
+  assert.ok(sawBalancedWater, 'Must verify 16x16 water tiles after setQuality(balanced)');
+
+  // 7. Verify all 13 nature/prop GLB keys were registered with Env.registerInstancedSwap + valid chunk refs & scaleAdjust
+  const swappedKeys = new Set(swapCalls.map(s => s.key));
+  const expectedKeys = [
+    'oak_tree', 'birch_tree', 'pine_tree', 'pine_snow',
+    'willow_tree', 'palm_tree', 'cactus_flower', 'bush_berry',
+    'boulder_moss', 'boulder_rock', 'fallen_log', 'tree_stump', 'lilypad',
+  ];
+  for (const k of expectedKeys) {
+    assert.ok(swappedKeys.has(k), `Expected Env.registerInstancedSwap for prop key '${k}', got [${[...swappedKeys].join(', ')}]`);
+  }
+  for (const sc of swapCalls) {
+    assert.ok(sc.opts && sc.opts.chunk && Array.isArray(sc.opts.chunk.meshes), `Swap '${sc.key}' must bind chunk for unload cancellation`);
+    if (sc.key === 'cactus_flower') {
+      assert.ok(sc.opts.scaleAdjust > 0.35 && sc.opts.scaleAdjust < 0.80, `cactus_flower scaleAdjust should normalize wide cluster, got ${sc.opts.scaleAdjust}`);
+    }
+    if (sc.key === 'pine_tree' || sc.key === 'pine_snow') {
+      assert.ok(sc.opts.scaleAdjust > 1.05, `pine swap must compensate 0.85 trunk scale, got ${sc.opts.scaleAdjust}`);
+    }
+  }
+});
+
+test('World + real Env integration is zero-GC in steady-state updateEnvironment and forwards quality/sky cleanly', () => {
+  const worldCode = fs.readFileSync(new URL('../world.js', import.meta.url), 'utf8');
+  const envCode = fs.readFileSync(new URL('../env.js', import.meta.url), 'utf8');
+  const baseTHREE = makeMockThree();
+  let allocCount = 0;
+  const THREE = new Proxy(baseTHREE, {
+    get(target, prop) {
+      const val = target[prop];
+      if (typeof val === 'function' && /^[A-Z]/.test(String(prop))) {
+        return new Proxy(val, {
+          construct(Ctor, args, newTarget) {
+            allocCount++;
+            return Reflect.construct(Ctor, args, newTarget);
+          },
+        });
+      }
+      return val;
+    },
+  });
+
+  const Shaders = {
+    createTerrainMaterial: () => new baseTHREE.MeshStandardMaterial({ name: 'terrainShaderMat' }),
+    createWaterMaterial: () => new baseTHREE.ShaderMaterial({ name: 'waterShaderMat' }),
+    createHorizonWaterMaterial: () => new baseTHREE.ShaderMaterial({ name: 'horizonShaderMat' }),
+    createGrassMaterial: () => new baseTHREE.MeshStandardMaterial({ vertexColors: true, name: 'grassShaderMat' }),
+    createKelpMaterial: () => new baseTHREE.MeshStandardMaterial({ name: 'kelpShaderMat' }),
+    createStarfieldMaterial: () => new baseTHREE.ShaderMaterial({ uniforms: { uStarAlpha: { value: 1 }, uTime: { value: 0 }, uSunDir: { value: new baseTHREE.Vector3() } } }),
+    createCloudMaterial: () => new baseTHREE.ShaderMaterial({ uniforms: { uTime: { value: 0 } } }),
+    createSkyDome: () => ({ mesh: new baseTHREE.Mesh(new baseTHREE.SphereGeometry(460, 8, 6), new baseTHREE.ShaderMaterial()), material: new baseTHREE.ShaderMaterial() }),
+    patchTreeWind: (m) => m,
+    patchFoliageReactive: (m) => m,
+    setCelestial() {},
+    setWind() {},
+    update() {},
+  };
+
+  const document = {
+    body: { appendChild() {} },
+    head: { appendChild() {} },
+    createElement() {
+      return { width: 0, height: 0, getContext: () => ({ fillText() {} }) };
+    },
+  };
+
+  const sandbox = {
+    Math, Map, Set, Array, WeakSet, WeakMap, Float32Array, Uint16Array, console,
+    THREE, Shaders, document,
+    innerWidth: 1280, innerHeight: 720, devicePixelRatio: 2,
+    addEventListener() {},
+  };
+  vm.runInNewContext(envCode + '\nthis.Env = Env;', sandbox);
+  vm.runInNewContext(
+    worldCode + '\nthis.__W = { scene, sun, hemiLight, setSkyProgress, setQuality, getQuality, updateChunks, updateEnvironment, chunks };',
+    sandbox
+  );
+
+  const W = sandbox.__W;
+  const RealEnv = sandbox.Env;
+
+  // Verify real Env rig mounted & quality switching works end-to-end
+  assert.ok(RealEnv.getSceneRig(), 'Real Env scene rig must mount on world scene');
+  W.setQuality('balanced');
+  assert.equal(RealEnv.getQuality(), 'balanced');
+  W.setQuality('high');
+  assert.equal(RealEnv.getQuality(), 'high');
+
+  // Stream a few chunks then move away to verify real Env.unregisterChunk path runs cleanly
+  for (let i = 0; i < 6; i++) W.updateChunks(36, 62);
+  for (let i = 0; i < 4; i++) W.updateChunks(-180, -180);
+
+  // Warm up 1 frame then measure steady-state updateEnvironment allocations over 60 frames
+  W.setSkyProgress(8);
+  W.updateEnvironment(4.0, 12, -10, 1.0, 0.016);
+  allocCount = 0;
+  for (let f = 0; f < 60; f++) {
+    W.updateEnvironment(4.0, 12 + f * 0.1, -10, 1.0 + f * 0.016, 0.016);
+  }
+  assert.equal(allocCount, 0, `Steady-state updateEnvironment must allocate ZERO THREE objects, got ${allocCount}`);
 });
