@@ -421,6 +421,49 @@ test('Sub-Project 4 landmarks: botanical Hollow Great-Tree canopy, underwater ca
   R.animateLandmarks(built, 0.016, 2.4);
   const pulseEntries = built.animated.filter((a) => a.kind === 'pulse');
   assert.ok(pulseEntries.length >= 6, 'Glowing Star-Rune collars on shrines/landmarks should gently pulse');
+  for (const p of pulseEntries) {
+    assert.ok(
+      Math.abs(p.mesh.scale.x - p.mesh.scale.y) < 1e-6,
+      `Pulsing Star-Rune collar must stay circular (scale.x=${p.mesh.scale.x}, scale.y=${p.mesh.scale.y})`
+    );
+    assert.ok(
+      Math.abs(p.mesh.scale.z - 0.48) < 1e-6,
+      `Pulsing Star-Rune collar must preserve slender thickness scale.z=0.48 (got ${p.mesh.scale.z})`
+    );
+  }
+
+  // Verify pulse phase = 0 is honored strictly (not replaced by loop index i)
+  const syntheticMeshA = new THREE.Mesh(new THREE.TorusGeometry(), new THREE.MeshStandardMaterial());
+  const syntheticMeshB = new THREE.Mesh(new THREE.TorusGeometry(), new THREE.MeshStandardMaterial());
+  R.animateLandmarks({
+    animated: [
+      { mesh: syntheticMeshA, kind: 'pulse', speed: 2.0, phase: 0, baseScale: 1.0, baseScaleZ: 0.48 },
+      { mesh: syntheticMeshB, kind: 'pulse', speed: 2.0, phase: 0, baseScale: 1.0, baseScaleZ: 0.48 },
+    ],
+  }, 0.016, 0.4);
+  assert.ok(
+    Math.abs(syntheticMeshA.scale.x - syntheticMeshB.scale.x) < 1e-6,
+    `Explicit phase=0 must drive identical pulse scale regardless of array index (${syntheticMeshA.scale.x} vs ${syntheticMeshB.scale.x})`
+  );
+
+  // 5b. Sunken Star-Temple altar pedestal (templePedH) must clear Totem 5 (-14, 94) and register a standable collider
+  const totem5 = R.TOTEM_ROUTE[4];
+  const hTemple = hFn(totem5.x, totem5.z);
+  const templeAltars = sunkenSwaps.filter(
+    (s) => s.key === 'shrine_pedestal' && Math.hypot(s.holder.position.x - totem5.x, s.holder.position.z - totem5.z) < 6.0
+  );
+  assert.equal(templeAltars.length, 1, 'Sunken Star-Temple upper terrace must mount exactly 1 flanking shrine_pedestal altar');
+  const altarPos = templeAltars[0].holder.position;
+  const distToTotem5 = Math.hypot(altarPos.x - totem5.x, altarPos.z - totem5.z);
+  assert.ok(
+    distToTotem5 >= 2.8 && distToTotem5 <= 4.5,
+    `Sunken Star-Temple altar pedestal must be clear of Totem 5 (>=2.8u) and inside upper terrace (<=4.5u), got ${distToTotem5.toFixed(2)}`
+  );
+  const altarCols = R.getNearbyColliders(altarPos.x, altarPos.z, 0.5, []);
+  assert.ok(
+    altarCols.some((c) => c.standable && Math.abs(c.topY - (hTemple + 3.15 + 1.45)) < 0.05),
+    'Sunken Star-Temple flanking altar pedestal must register a standable collider on top of its pedestal'
+  );
 
   // 6. Lightweight mock THREE (without BufferGeometry) also builds multi-tier PlaneGeometry leaf cards with zero DodecahedronGeometry
   const fallbackCtx = loadRegions(true, {

@@ -539,7 +539,10 @@ const Regions = (() => {
       fallback.userData.isPlaceholder = true;
       holder.add(fallback);
 
-      const isMat = extraOpts && (extraOpts.isMaterial || extraOpts instanceof THREE.MeshStandardMaterial);
+      const isMat = extraOpts && (
+        extraOpts.isMaterial ||
+        (typeof THREE.MeshStandardMaterial === 'function' && (extraOpts instanceof THREE.MeshStandardMaterial))
+      );
       const cfg = isMat ? { mat: extraOpts } : (extraOpts || {});
 
       if (typeof fallbackBuilder === 'function') {
@@ -809,7 +812,7 @@ const Regions = (() => {
         baseEmissive: 0.55,
         pulseAmp: 0.60,
         baseScale: radius,
-        baseScaleY: radius,
+        baseScaleZ: 0.48,
       });
       return collar;
     };
@@ -1353,14 +1356,17 @@ const Regions = (() => {
     addShadowMesh(new THREE.CylinderGeometry(5.6, 6.4, 1.0, 16), sunkenStone, tx, hT + 2.65, tz);
     addCollider(tx, tz, 5.8, hT + 3.15, true);
 
-    // Central caustic-lit temple altar pedestal crowned with pulsing Star-Rune collar
+    // Flanking caustic-lit temple altar pedestal on upper terrace (clear of Totem 5 at (-14, 94) and ringed columns at r=7.2)
+    const altarX = tx;
+    const altarZ = tz + 3.6;
     const templePedH = mountSwappableProp(
       'shrine_pedestal',
       (fb) => buildCarvedPedestalLocal(fb, 1.45, sunkenStone),
-      tx, hT + 3.15, tz, 0, 1.45,
+      altarX, hT + 3.15, altarZ, Math.PI, 1.45,
       { caustics: true }
     );
     addStarRuneCollar(templePedH, 0, 1.34, 0, 0.68, runeAquaMat, 2.1, 0.3);
+    addCollider(altarX, altarZ, 0.92, hT + 3.15 + 1.45, true);
 
     // 8 ringed temple columns + glowing Celestial Tide-Dome crown shining up through the turquoise bay!
     for (let i = 0; i < 8; i++) {
@@ -1445,7 +1451,7 @@ const Regions = (() => {
       } else if (item.kind === 'sway') {
         m.rotation.z = Math.sin(nowTime * item.speed + (item.phase || 0)) * 0.16;
       } else if (item.kind === 'pulse') {
-        const wave = 0.5 + 0.5 * Math.sin(nowTime * (item.speed || 2.0) + (item.phase || i));
+        const wave = 0.5 + 0.5 * Math.sin(nowTime * (item.speed || 2.0) + (item.phase !== undefined ? item.phase : i));
         if (item.mat && typeof item.mat.emissiveIntensity === 'number') {
           item.mat.emissiveIntensity =
             (item.baseEmissive !== undefined ? item.baseEmissive : 0.55) +
@@ -1453,7 +1459,7 @@ const Regions = (() => {
         }
         if (typeof item.baseScale === 'number' && m.scale && typeof m.scale.set === 'function') {
           const s = item.baseScale * (1 + (wave - 0.5) * 0.04);
-          m.scale.set(s, item.baseScaleY || s, s);
+          m.scale.set(s, s, item.baseScaleZ !== undefined ? item.baseScaleZ : 0.48);
         }
       }
     }
