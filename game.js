@@ -923,6 +923,10 @@ function updatePickups(dt, nowTime) {
     const d3 = Math.hypot(dx, dy, dz);
     const isHeart = u.kind === 'heart';
     const ready = !u.bouncing || u.age > 0.25;
+    const heartExpired = isHeart && u.age > 32;
+    if (isHeart && u.age > 29.5 && p.scale && typeof p.scale.setScalar === 'function') {
+      p.scale.setScalar(Math.max(0.05, (32 - u.age) / 2.5));
+    }
 
     let consumed = false;
     if (d3 < 0.95 && ready) {
@@ -970,7 +974,7 @@ function updatePickups(dt, nowTime) {
       }
     }
 
-    if (consumed || dHoriz > 90) {
+    if (consumed || heartExpired || dHoriz > 90) {
       scene.remove(p);
       pickups.splice(i, 1);
     }
@@ -1753,12 +1757,21 @@ function respawnPlayer() {
     if (starEl) starEl.textContent = stars;
   }
 
-  // Surviving rescued/befriended Starling companions immediately rally around you!
+  // Surviving rescued/befriended Starling companions immediately rally around you in concentric rings!
   for (let i = 0; i < followers.length; i++) {
     const f = followers[i];
-    const ang = (i / Math.max(1, followers.length)) * Math.PI * 2 + 0.5;
-    const fx = P.x + Math.cos(ang) * 2.4;
-    const fz = P.z + Math.sin(ang) * 2.4;
+    let ring = 0;
+    let idxInRing = i;
+    let ringCap = 6;
+    while (idxInRing >= ringCap) {
+      idxInRing -= ringCap;
+      ring++;
+      ringCap = 6 + ring * 4;
+    }
+    const ang = (idxInRing / Math.max(1, ringCap)) * Math.PI * 2 + 0.5 + ring * 0.35;
+    const rad = 2.4 + ring * 1.75;
+    const fx = P.x + Math.cos(ang) * rad;
+    const fz = P.z + Math.sin(ang) * rad;
     const fy = Math.max(heightAt(fx, fz), WATER_Y);
     f.mesh.position.set(fx, fy, fz);
     if (f.phys) {
@@ -1771,7 +1784,8 @@ function respawnPlayer() {
     f.hp = f.maxHp;
     f.kx = 0;
     f.kz = 0;
-    burst(fx, f.mesh.position.y + 0.8, fz, 0xffd93b, 6);
+    f._stuckT = 0;
+    if (i < 18) burst(fx, f.mesh.position.y + 0.8, fz, 0xffd93b, 6);
   }
 
   if (deathOverlayEl && deathOverlayEl.classList) deathOverlayEl.classList.remove('show');
@@ -1786,7 +1800,28 @@ function respawnPlayer() {
   );
 }
 
+const HEART_MAX_ACTIVE = 12;
+
 function spawnHeartDrop(x, y, z) {
+  // Cap active spare heart crystals so long battles with large bands never carpet the meadow
+  let heartCount = 0;
+  let oldestIdx = -1;
+  let oldestAge = -1;
+  for (let i = 0; i < pickups.length; i++) {
+    const pu = pickups[i] && pickups[i].userData;
+    if (pu && pu.kind === 'heart') {
+      heartCount++;
+      const age = pu.age || 0;
+      if (age > oldestAge) {
+        oldestAge = age;
+        oldestIdx = i;
+      }
+    }
+  }
+  if (heartCount >= HEART_MAX_ACTIVE && oldestIdx >= 0) {
+    scene.remove(pickups[oldestIdx]);
+    pickups.splice(oldestIdx, 1);
+  }
   const mesh = Models.makeHeartPickup();
   const ang = Math.random() * Math.PI * 2;
   const spd = 2.0 + Math.random() * 1.4;

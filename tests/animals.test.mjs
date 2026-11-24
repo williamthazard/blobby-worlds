@@ -2689,10 +2689,11 @@ test('Band diversity synergy, defense mitigation, aerial anti-Stinger focus, and
   hurtBeetle.hp = hurtBeetle.maxHp - 1.5;
   for (let i = 0; i < diverseTeam.length; i++) {
     diverseTeam[i]._standT = 4.0;
-    const slotRow = Math.floor(i / 2);
     const side = (i % 2 === 0) ? 1 : -1;
-    const flankAngle = Math.PI + side * (0.75 + 0.45 * (slotRow % 3));
-    const slotDist = 2.3 + slotRow * 1.15;
+    const pairStep = Math.floor(i / 2);
+    const arcSpread = 0.55 + ((pairStep + 0.5) / 3) * 1.65;
+    const flankAngle = Math.PI + side * arcSpread;
+    const slotDist = 2.4;
     diverseTeam[i].mesh.position.set(Math.sin(flankAngle) * slotDist, 0, Math.cos(flankAngle) * slotDist);
     diverseTeam[i].phys.smoothSpd = 0;
   }
@@ -2794,4 +2795,63 @@ test('Regression: eat/sleep/idle clips NEVER match Death ("d-eat-h") on Velocira
     }
     assert.ok(playedClips.some((p) => p.mode === 'eat'), `${spName} eat mode should be verified`);
   }
+});
+
+test('Regression: large 26-friend bands stay compact around Starkeeper and stranded/stuck followers smoothly regroup', () => {
+  const h = loadAnimalsHarness();
+  const Physics = makeTestPhysicsHelpers();
+  const baseCtx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    P: { x: 0, y: 0, z: 0, vx: 0, vz: 0, facing: 0, dead: false, swimming: false },
+    glooms: [],
+    heightAt: () => 0,
+    WATER_Y: -0.35,
+    burst: () => {},
+  };
+
+  // Create 26 companions scattered far away (simulating outrunning/stranding them while sprinting!)
+  const band = [];
+  for (let i = 0; i < 26; i++) {
+    const sp = { name: i % 2 === 0 ? 'Berry Beetle' : 'Frost Fox', plan: i % 2 === 0 ? 'bug' : 'quad' };
+    const m = new h.THREE.Group('Ally' + i);
+    m.position.set(60 + i * 2, 0, 50); // > 75u away!
+    band.push({
+      mesh: m,
+      species: sp,
+      stats: h.Animals.rollIndividualStats(sp, () => 0.5),
+      hp: 4, maxHp: 4, hurtInvulnT: 0, flash: 0, atkCooldown: 0, attacker: null, defendT: 0, kx: 0, kz: 0,
+      phys: h.Animals.createPhysicsState(60 + i * 2, 0, 50, sp),
+    });
+  }
+
+  // First update tick smoothly regroups all far-stranded followers behind Starkeeper
+  h.Animals.updateFollowers(band, 0.05, 1.0, baseCtx);
+  for (let i = 0; i < band.length; i++) {
+    const p = band[i].mesh.position;
+    const d = Math.hypot(p.x - baseCtx.P.x, p.z - baseCtx.P.z);
+    assert.ok(d < 10.0, `Stranded follower #${i} must regroup near Starkeeper, got dist=${d.toFixed(2)}`);
+  }
+
+  // After settling in formation, all 26 friends stay in compact concentric crescent rings (< 9u, NOT 16u+ conga line!)
+  for (let k = 0; k < 60; k++) {
+    h.Animals.updateFollowers(band, 0.05, 1.0 + k * 0.05, baseCtx);
+  }
+  const maxDist = Math.max(...band.map((f) => Math.hypot(f.mesh.position.x, f.mesh.position.z)));
+  assert.ok(maxDist < 9.5, `All 26 friends should settle within compact crescent pack (< 9.5u), got maxDist=${maxDist.toFixed(2)}`);
+
+  // Also test cliff-stuck regroup: follower stuck at 22u with zero movement for > 4.5s regroups cleanly
+  const stuckAlly = band[0];
+  stuckAlly.mesh.position.set(22, 0, 0);
+  stuckAlly.phys.smoothSpd = 0;
+  stuckAlly._stuckT = 0;
+  for (let k = 0; k < 52; k++) {
+    stuckAlly.phys.smoothSpd = 0;
+    stuckAlly.mesh.position.x = 22; // simulate cliff blocking progress
+    h.Animals.updateFollowers([stuckAlly], 0.1, 10 + k * 0.1, baseCtx);
+    if (Math.hypot(stuckAlly.mesh.position.x, stuckAlly.mesh.position.z) < 10) break;
+  }
+  const dAfterStuck = Math.hypot(stuckAlly.mesh.position.x, stuckAlly.mesh.position.z);
+  assert.ok(dAfterStuck < 10.0, `Cliff-stuck follower must regroup after ~4.5s, got dist=${dAfterStuck.toFixed(2)}`);
 });

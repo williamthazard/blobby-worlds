@@ -1041,6 +1041,19 @@ test('hearts are only absorbed when needed, heal injured companions when player 
   assert.equal(dbg.pickups.includes(heart2), false, 'Hurt Starkeeper should absorb heart');
   assert.equal(dbg.P.hp, 10, 'Heart should heal Starkeeper by +2 half-hearts');
 
+  // 3b. Heart pickups cap at <= 12 active and expire cleanly after 32s so long sessions never carpet the world!
+  dbg.P.hp = dbg.P.maxHp;
+  ally.hp = ally.maxHp;
+  for (let hi = 0; hi < 18; hi++) {
+    sandbox.spawnHeartDrop(dbg.P.x + 8 + hi * 0.2, dbg.P.y, dbg.P.z + 8);
+  }
+  const activeHearts = dbg.pickups.filter(p => p.userData && p.userData.kind === 'heart');
+  assert.ok(activeHearts.length <= 12, `Active heart drops must be capped at <= 12, got ${activeHearts.length}`);
+  activeHearts[0].userData.age = 33;
+  const expiredHeart = activeHearts[0];
+  tick(2);
+  assert.equal(dbg.pickups.includes(expiredHeart), false, 'Heart pickup older than 32s must expire cleanly');
+
   // 4. Companions walking on snow/sand leave crisp distance-synced footprints (all grounded body plans!)
   sandbox.surfaceAt = () => 'snow';
   const printsBefore = dbg.footprintPool.slots.filter(s => s.active).length;

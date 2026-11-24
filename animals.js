@@ -3175,11 +3175,60 @@ const Animals = (() => {
       } else {
         if (f._chargeSpd !== undefined && f._chargeSpd > 5.5) f._chargeSpd = 5.5;
         f._pounceAnimFired = false;
-        // Flanking Pack Formation behind/beside Starkeeper + Boids Separation + Arrival Damping
-        const slotRow = Math.floor(i / 2);
-        const side = (i % 2 === 0) ? 1 : -1;
-        const flankAngle = pFacing + Math.PI + side * (0.75 + 0.45 * (slotRow % 3));
-        const slotDist = 2.3 + slotRow * 1.15;
+
+        // Smart Regroup Leash: if a non-fighting companion falls far behind (> 38u) after sprinting
+        // or gets wedged behind a cliff/obstacle (> 4.5s stuck at > 18u), gracefully regroup it behind Starkeeper!
+        const distToPlayer = Math.hypot(prevX - px, prevZ - pz);
+        if (!P.dead && distToPlayer > 18.0) {
+          if (phys.smoothSpd < 0.75) {
+            f._stuckT = (f._stuckT || 0) + aiDt;
+          } else {
+            f._stuckT = Math.max(0, (f._stuckT || 0) - aiDt * 2.0);
+          }
+          if (distToPlayer > 38.0 || f._stuckT > 4.5) {
+            const hFn = typeof c.heightAt === 'function' ? c.heightAt : defaultHeightZero;
+            const waterY = c.WATER_Y !== undefined ? c.WATER_Y : ANIMAL_DEFAULT_WATER_Y;
+            const regAng = pFacing + Math.PI + (((i % 7) - 3) * 0.34);
+            const regDist = 3.6 + (i % 3) * 1.15;
+            const rx = px + Math.sin(regAng) * regDist;
+            const rz = pz + Math.cos(regAng) * regDist;
+            const gh = hFn(rx, rz);
+            const ry = aerial ? Math.max(gh, waterY) + 0.9 : (P.swimming ? Math.max(gh, waterY - 0.35) : Math.max(gh, waterY));
+            pos.x = rx;
+            pos.y = ry;
+            pos.z = rz;
+            phys.vx = 0;
+            phys.vy = 0;
+            phys.vz = 0;
+            phys.onGround = !aerial && ry <= gh + 0.05;
+            phys.inWater = !aerial && ry < waterY;
+            f.kx = 0;
+            f.kz = 0;
+            f._stuckT = 0;
+            if (typeof c.burst === 'function') {
+              c.burst(rx, ry + 0.65, rz, 0xffe89c, 5, true);
+            }
+            continue;
+          }
+        } else {
+          f._stuckT = 0;
+        }
+
+        // Compact Concentric Crescent Pack Formation behind/beside Starkeeper (scales cleanly to 25-100+ friends!)
+        let ring = 0;
+        let idxInRing = i;
+        let ringCap = 6;
+        while (idxInRing >= ringCap) {
+          idxInRing -= ringCap;
+          ring++;
+          ringCap = 6 + ring * 4;
+        }
+        const side = (idxInRing % 2 === 0) ? 1 : -1;
+        const pairStep = Math.floor(idxInRing / 2);
+        const maxPairs = Math.max(1, Math.ceil(ringCap / 2));
+        const arcSpread = 0.55 + ((pairStep + 0.5) / maxPairs) * 1.65;
+        const flankAngle = pFacing + Math.PI + side * arcSpread;
+        const slotDist = 2.4 + ring * 1.75;
         const slotX = px + Math.sin(flankAngle) * slotDist;
         const slotZ = pz + Math.cos(flankAngle) * slotDist;
 
@@ -3215,7 +3264,9 @@ const Animals = (() => {
         const arriveRadius = 2.0;
 
         if (distSlot > 0.35) {
-          const baseSpd = Math.min(10.5, 2.2 + distSlot * 2.2) * spdMult;
+          // Catch-up sprint boost when falling behind Starkeeper (> 10u) so band keeps pace during sprints!
+          const catchupCap = distSlot > 10.0 ? 13.5 : 10.5;
+          const baseSpd = Math.min(catchupCap, 2.2 + distSlot * 2.2) * spdMult;
           const ramp = distSlot < arriveRadius ? Math.max(0.25, distSlot / arriveRadius) : 1.0;
           const moveSpd = baseSpd * ramp;
           desVx = (dxSlot / distSlot) * moveSpd + sepVx;
@@ -3231,7 +3282,7 @@ const Animals = (() => {
         if (aerial) {
           targetAlt = f.celebrateT > 0
             ? 1.55 + Math.sin(nowTime * 9 + i) * 0.25
-            : (0.78 + (slotRow % 2) * 0.22 + Math.sin(nowTime * 2.8 + i) * 0.14);
+            : (0.78 + (ring % 2) * 0.22 + Math.sin(nowTime * 2.8 + i) * 0.14);
         }
 
         // Idle Grazing & Resting when Starkeeper stands still > 3.0s

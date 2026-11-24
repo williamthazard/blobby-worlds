@@ -6,6 +6,7 @@ Thumbs.db
 scripts/__pycache__/
 *.pyc
 *.log
+.superpowers/
 
 # Raw standalone third-party asset packs (excluded per Quaternius QAL v1.0 Sec. 3a & repo size)
 assets/Modular Character Outfits - Fantasy\[Standard\]/
