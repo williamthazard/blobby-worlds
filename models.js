@@ -4381,6 +4381,47 @@ const Models = (() => {
     return g;
   }
 
+  function makeBirdLegs(color) {
+    const s = ensureShared();
+    const mats = color !== undefined ? getSpeciesMats('bird', color) : null;
+    const g = new THREE.Group();
+    g.name = 'BirdLegs';
+
+    const thighGeo = geo('attach_bird_thigh_v1', () => new THREE.CylinderGeometry(0.017, 0.011, 0.125, 6).translate(0, -0.0375, 0));
+    const ankleGeo = geo('attach_bird_ankle_v1', () => new THREE.SphereGeometry(0.011, 6, 5));
+    const shinGeo = geo('attach_bird_shin_v1', () => new THREE.CylinderGeometry(0.010, 0.008, 0.142, 6).translate(0, -0.165, 0));
+    const toeGeo = geo('attach_bird_toe_v1', () => new THREE.ConeGeometry(0.0085, 0.072, 5));
+    const legGeo = mergeGeo('attach_bird_leg_v1', () => [
+      [thighGeo, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+      [ankleGeo, 0, -0.095, 0, 0, 0, 0, 1, 1, 1],
+      [shinGeo, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+      [toeGeo, -0.018, -0.2315, 0.034, Math.PI * 0.5, 0, 0.42, 1, 1, 1],
+      [toeGeo, 0, -0.2315, 0.036, Math.PI * 0.5, 0, 0, 1, 1, 1],
+      [toeGeo, 0.018, -0.2315, 0.034, Math.PI * 0.5, 0, -0.42, 1, 1, 1],
+      [toeGeo, 0, -0.2315, -0.028, -Math.PI * 0.5, 0, 0, 0.85, 0.72, 0.85],
+    ]);
+    const cuffGeo = mats
+      ? geo('attach_bird_thigh_cuff_v1', () => new THREE.CylinderGeometry(0.024, 0.015, 0.072, 6).translate(0, -0.022, 0))
+      : null;
+
+    const legs = [];
+    for (let i = 0; i < 2; i++) {
+      const side = i === 0 ? -1 : 1;
+      const leg = new THREE.Group();
+      leg.name = side < 0 ? 'LeftBirdLeg' : 'RightBirdLeg';
+      leg.position.set(side * 0.056, 0.24, 0);
+      leg.add(makeMesh(legGeo, s.wishBeak));
+      if (cuffGeo && mats) {
+        leg.add(makeMesh(cuffGeo, mats.main));
+      }
+      g.add(leg);
+      legs.push(leg);
+    }
+
+    g.userData = { leftLeg: legs[0], rightLeg: legs[1] };
+    return g;
+  }
+
   function makeFireflyLantern() {
     const s = ensureShared();
     const g = new THREE.Group();
@@ -4711,6 +4752,7 @@ const Models = (() => {
     makeLynxEarTufts,
     makeDrakeEmberCrest,
     makeOwlEarTufts,
+    makeBirdLegs,
     makeFireflyLantern,
     makeKelpFronds,
     makeWishCrown,

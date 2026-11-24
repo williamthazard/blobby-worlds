@@ -254,11 +254,13 @@ function makeMockTHREE() {
       this.clampWhenFinished = false;
       this.playing = false;
       this.crossFades = [];
+      this.stopFadingCalls = 0;
     }
     getClip() { return this._clip; }
     reset() { this.time = 0; this.enabled = true; this.paused = false; return this; }
     play() { this.enabled = true; this.playing = true; return this; }
     stop() { this.playing = false; this.weight = 0; return this; }
+    stopFading() { this.stopFadingCalls++; return this; }
     setLoop(mode) { this.loop = mode; return this; }
     setEffectiveTimeScale(s) { this.timeScale = s; return this; }
     setEffectiveWeight(w) { this.weight = w; return this; }
@@ -346,6 +348,7 @@ function makeMockArchetypeGltf(THREE, key) {
 
   if (key === 'bird') {
     const morphNames = Array.from({ length: 12 }, (_, i) => `parrot_A_${String(i + 1).padStart(3, '0')}`);
+    morphNames.push('Perch');
     const birdMesh = new THREE.Mesh('ParrotMesh', '', { vertexColors: true, morphNames });
     root.add(birdMesh);
     return {
@@ -565,6 +568,17 @@ function loadAnimalsHarness({
     makeWishCrown() {
       const g = new THREE.Group('WishCrown');
       calls.attachments.push('WishCrown');
+      return g;
+    },
+    makeBirdLegs(col) {
+      const g = new THREE.Group('BirdLegs');
+      const leftLeg = new THREE.Group('LeftBirdLeg');
+      leftLeg.position.set(-0.056, 0.24, 0);
+      const rightLeg = new THREE.Group('RightBirdLeg');
+      rightLeg.position.set(0.056, 0.24, 0);
+      g.add(leftLeg, rightLeg);
+      g.userData = { leftLeg, rightLeg, color: col };
+      calls.attachments.push('BirdLegs');
       return g;
     },
     animateCritter() {
@@ -918,7 +932,7 @@ test('semantic clip routing, crossFadeTo, speed-coupled timeScale, one-shots, lo
 
   ctrl.update(0.016, 0.3, { mode: 'run', speed: 12.0, refSpeed: 5.0, isMoving: true });
   assert.equal(ctrl.state.clip, 'run');
-  assert.equal(ctrl.state.timeScale, 1.75);
+  assert.equal(ctrl.state.timeScale, 2.35);
 
   ctrl.update(0.016, 0.4, { mode: 'jump', speed: 4.0, airborne: true });
   assert.equal(ctrl.state.clip, 'jump');
@@ -2854,4 +2868,286 @@ test('Regression: large 26-friend bands stay compact around Starkeeper and stran
   }
   const dAfterStuck = Math.hypot(stuckAlly.mesh.position.x, stuckAlly.mesh.position.z);
   assert.ok(dAfterStuck < 10.0, `Cliff-stuck follower must regroup after ~4.5s, got dist=${dAfterStuck.toFixed(2)}`);
+});
+
+test('Fix 1: Models.makeBirdLegs & resting birds perch on land with folded wings, extended legs, and paused flap (hover over water, Wish floats)', () => {
+  // 1. Verify real Models.makeBirdLegs structure, hip pivot y=0.24, and feet at local y=0
+  const modelsCode = fs.readFileSync(new URL('../models.js', import.meta.url), 'utf8');
+  class GeoMock {
+    constructor(k, minY = 0, maxY = 0) { this.k = k; this.minY = minY; this.maxY = maxY; }
+    translate(_x, y = 0) { this.minY += y; this.maxY += y; return this; }
+    rotateX() { return this; }
+    rotateY() { return this; }
+    rotateZ() { return this; }
+    scale() { return this; }
+    computeVertexNormals() { return this; }
+  }
+  class ObjMock {
+    constructor() {
+      this.children = [];
+      this.position = { x: 0, y: 0, z: 0, set(x, y, z) { this.x = x; this.y = y; this.z = z; } };
+      this.rotation = { x: 0, y: 0, z: 0, order: 'XYZ' };
+      this.scale = { x: 1, y: 1, z: 1, set(x, y, z) { this.x = x; this.y = y; this.z = z; }, setScalar(s) { this.x = s; this.y = s; this.z = s; } };
+      this.userData = {};
+    }
+    add(...items) { for (const c of items) { c.parent = this; this.children.push(c); } return this; }
+  }
+  class MatMock { constructor(p = {}) { Object.assign(this, p); } clone() { return new MatMock({ ...this }); } }
+  const mTHREE = {
+    Group: ObjMock,
+    Mesh: class extends ObjMock { constructor(g, m) { super(); this.geometry = g; this.material = m; } },
+    PointLight: ObjMock,
+    Sprite: ObjMock,
+    Color: class { multiplyScalar() { return this; } lerp() { return this; } clone() { return this; } },
+    DoubleSide: 2,
+    AdditiveBlending: 2,
+    MeshStandardMaterial: MatMock,
+    MeshBasicMaterial: MatMock,
+    SphereGeometry: class extends GeoMock { constructor(r = 1) { super('sphere', -r, r); } },
+    CylinderGeometry: class extends GeoMock { constructor(_rt = 1, _rb = 1, h = 1) { super('cyl', -h / 2, h / 2); } },
+    ConeGeometry: class extends GeoMock { constructor(_r = 1, h = 1) { super('cone', -h / 2, h / 2); } },
+    BoxGeometry: class extends GeoMock { constructor(_w = 1, h = 1) { super('box', -h / 2, h / 2); } },
+    TorusGeometry: class extends GeoMock { constructor() { super('torus', 0, 0); } },
+    OctahedronGeometry: class extends GeoMock { constructor(r = 1) { super('octa', -r, r); } },
+    IcosahedronGeometry: class extends GeoMock { constructor(r = 1) { super('ico', -r, r); } },
+    DodecahedronGeometry: class extends GeoMock { constructor(r = 1) { super('dod', -r, r); } },
+    PlaneGeometry: class extends GeoMock { constructor(_w = 1, h = 1) { super('plane', -h / 2, h / 2); } },
+  };
+  const mSandbox = {
+    THREE: mTHREE, Math, Map, Set,
+    Textures: { sets: {} },
+    Shaders: { createGlowSprite: () => new ObjMock() },
+    console,
+  };
+  vm.runInNewContext(modelsCode + '\nthis.__Models = Models;', mSandbox);
+  assert.equal(typeof mSandbox.__Models.makeBirdLegs, 'function', 'Models must expose makeBirdLegs');
+  const legsGrp = mSandbox.__Models.makeBirdLegs(0xf7d948);
+  assert.ok(legsGrp.userData.leftLeg && legsGrp.userData.rightLeg, 'makeBirdLegs must expose userData.leftLeg & rightLeg');
+  assert.ok(Math.abs(legsGrp.userData.leftLeg.position.y - 0.24) < 1e-4, 'Hip pivot must sit at y=0.24');
+  assert.ok(Math.abs(legsGrp.userData.rightLeg.position.y - 0.24) < 1e-4, 'Hip pivot must sit at y=0.24');
+  assert.ok(legsGrp.userData.leftLeg.position.x < 0 && legsGrp.userData.rightLeg.position.x > 0);
+  assert.ok(legsGrp.userData.leftLeg.children.length >= 1, 'Left leg must contain leg geometry mesh');
+
+  // 2. Dry land resting owl & wren perch cleanly; Wish stays floating; bird over water hovers
+  const h = loadAnimalsHarness();
+  const Physics = makeTestPhysicsHelpers();
+  const owlSp = { name: 'Golden Owl', plan: 'bird', archetype: 'owl', color: 0xf7d948 };
+  const wrenSp = { name: 'Cloud Wren', plan: 'bird', archetype: 'songbird', color: 0xf2f5f7 };
+  const wishSp = { name: 'Wish', plan: 'bird', color: 0xffd93b };
+
+  const makeBirdFollower = (sp, x, y, z) => {
+    const mesh = new h.THREE.Group(sp.name);
+    mesh.position.set(x, y, z);
+    h.Animals.attachToCritter(mesh, sp);
+    return {
+      mesh,
+      species: sp,
+      hp: 3, maxHp: 3, hurtInvulnT: 0, flash: 0, atkCooldown: 0, attacker: null, defendT: 0, kx: 0, kz: 0,
+      phys: h.Animals.createPhysicsState(x, y, z, sp),
+    };
+  };
+
+  const owl = makeBirdFollower(owlSp, -2.1, 1.0, -1.5);
+  const wren = makeBirdFollower(wrenSp, 2.1, 1.0, -1.5);
+  const wish = makeBirdFollower(wishSp, 0, 1.0, -2.5);
+  const followers = [owl, wren, wish];
+
+  const landCtx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    P: { x: 0, y: 0, z: 0, vx: 0, vz: 0, facing: 0, dead: false },
+    glooms: [],
+    heightAt: () => 0.5, // Dry land well above WATER_Y (-0.35)
+    WATER_Y: -0.35,
+  };
+
+  // Run > 4.5s at rest so birds settle and ramp perchBlend -> 1
+  for (let f = 0; f < 130; f++) {
+    h.Animals.updateFollowers(followers, 0.05, f * 0.05, landCtx);
+  }
+
+  const getBirdParts = (root) => {
+    let legs = null;
+    let morphMesh = null;
+    root.traverse((o) => {
+      if (o.name === 'BirdLegs') legs = o;
+      if (o.morphTargetInfluences) morphMesh = o;
+    });
+    return { legs, morphMesh };
+  };
+
+  const owlParts = getBirdParts(owl.mesh);
+  const wrenParts = getBirdParts(wren.mesh);
+  const wishParts = getBirdParts(wish.mesh);
+
+  assert.ok(owlParts.legs, 'Golden Owl must attach BirdLegs');
+  assert.ok(wrenParts.legs, 'Cloud Wren must attach BirdLegs');
+  assert.equal(wishParts.legs, null, 'Wish must NOT attach BirdLegs');
+
+  assert.ok((owl.perchBlend || 0) > 0.96, `Settled Owl on land must reach perchBlend > 0.96, got ${owl.perchBlend}`);
+  assert.ok((wren.perchBlend || 0) > 0.96, `Settled Wren on land must reach perchBlend > 0.96, got ${wren.perchBlend}`);
+  assert.equal(wish.perchBlend || 0, 0, 'Wish must stay floating (perchBlend === 0)');
+
+  assert.ok(owlParts.morphMesh.morphTargetInfluences[12] > 0.96, 'Owl Perch morph target weight must be ~1.0 when perched');
+  assert.ok(Math.abs(owlParts.legs.userData.leftLeg.rotation.x) < 0.08, 'Perched Owl legs must extend straight down (rotation.x ~ 0)');
+  assert.ok(owl.mesh.position.y > 0.65 && owl.mesh.position.y < 0.98, `Owl standing hip y above floorY=0.5 should sit cleanly near ~0.87, got ${owl.mesh.position.y}`);
+  assert.ok(wren.mesh.position.y > 0.62 && wren.mesh.position.y < 0.85, `Wren standing hip y above floorY=0.5 should sit cleanly near ~0.72, got ${wren.mesh.position.y}`);
+  assert.ok(wish.mesh.position.y > 1.0, `Wish should continue floating above land, got y=${wish.mesh.position.y}`);
+
+  // Owl mixer flight action must be paused with weight near 0 while perched on land
+  const owlMixer = h.THREE._mixers[0];
+  const owlAct = [...owlMixer.actions.values()][0];
+  assert.equal(owlAct.paused, true, 'Perched bird flight clip must pause on land so wings never flap into ground');
+  assert.ok(owlAct.weight < 0.05, `Perched bird flight clip weight must fade to ~0, got ${owlAct.weight}`);
+
+  // Moving bird over water must tuck legs, unfold wings (Perch=0), resume flapping, and hover >= 0.82 above water
+  const waterCtx = {
+    ...landCtx,
+    heightAt: () => -2.0, // Over water (<= WATER_Y + 0.05)
+    WATER_Y: -0.35,
+  };
+  for (let f = 0; f < 60; f++) {
+    h.Animals.updateFollowers(followers, 0.05, 6.5 + f * 0.05, waterCtx);
+  }
+  assert.ok((owl.perchBlend || 0) < 0.05, `Bird over water must drop perchBlend -> 0, got ${owl.perchBlend}`);
+  assert.ok(owlParts.morphMesh.morphTargetInfluences[12] < 0.05, 'Perch morph weight must return to 0 over water');
+  assert.ok(owlParts.legs.userData.leftLeg.rotation.x > 1.15, `Bird legs over water must tuck into belly (~1.25), got ${owlParts.legs.userData.leftLeg.rotation.x}`);
+  assert.equal(owlAct.paused, false, 'Bird over water must resume flapping flight clip');
+  assert.ok(owl.mesh.position.y - (-0.35) >= 0.80, `Bird over water must hover cleanly (>= 0.82 targetAlt), got alt=${owl.mesh.position.y + 0.35}`);
+});
+
+test('Fix 2: 60-friend pack formation has >= 1.85u slot spacing and settles cleanly at dt=0.05 without twitching', () => {
+  const h = loadAnimalsHarness();
+  const Physics = makeTestPhysicsHelpers();
+  const ctx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    P: { x: 0, y: 0, z: 0, vx: 0, vz: 0, facing: 0, dead: false },
+    glooms: [],
+    heightAt: () => 0,
+    WATER_Y: -0.35,
+  };
+
+  const pack = [];
+  for (let i = 0; i < 60; i++) {
+    const sp = { name: i % 3 === 0 ? 'Timber Wolf' : (i % 3 === 1 ? 'Frost Fox' : 'Berry Beetle'), plan: i % 3 === 2 ? 'bug' : 'quad' };
+    const m = new h.THREE.Group('Pack' + i);
+    // Start clustered near player to force separation + ring formation under dt=0.05
+    const ang = (i / 60) * Math.PI * 2;
+    const r = 1.5 + (i % 5) * 0.5;
+    m.position.set(Math.cos(ang) * r, 0, Math.sin(ang) * r);
+    pack.push({
+      mesh: m,
+      species: sp,
+      hp: 4, maxHp: 4, hurtInvulnT: 0, flash: 0, atkCooldown: 0, attacker: null, defendT: 0, kx: 0, kz: 0,
+      phys: h.Animals.createPhysicsState(m.position.x, 0, m.position.z, sp),
+    });
+  }
+
+  for (let k = 0; k < 140; k++) {
+    h.Animals.updateFollowers(pack, 0.05, k * 0.05, ctx);
+  }
+
+  // Record positions & yaws across 20 more dt=0.05 frames after settling -> ZERO twitching / sideways jerks!
+  const prevPos = pack.map((f) => ({ x: f.mesh.position.x, z: f.mesh.position.z, yaw: f.mesh.rotation.y }));
+  let maxTickStep = 0;
+  let maxYawFlip = 0;
+  for (let k = 0; k < 20; k++) {
+    h.Animals.updateFollowers(pack, 0.05, 7.0 + k * 0.05, ctx);
+    for (let i = 0; i < pack.length; i++) {
+      const p = pack[i].mesh.position;
+      const step = Math.hypot(p.x - prevPos[i].x, p.z - prevPos[i].z);
+      let dyaw = pack[i].mesh.rotation.y - prevPos[i].yaw;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      if (step > maxTickStep) maxTickStep = step;
+      if (Math.abs(dyaw) > maxYawFlip) maxYawFlip = Math.abs(dyaw);
+      prevPos[i].x = p.x;
+      prevPos[i].z = p.z;
+      prevPos[i].yaw = pack[i].mesh.rotation.y;
+    }
+  }
+  assert.ok(maxTickStep < 0.04, `Settled 60-friend pack must NOT twitch/jerk at dt=0.05 (maxTickStep=${maxTickStep.toFixed(4)})`);
+  assert.ok(maxYawFlip < 0.15, `Settled 60-friend pack must NOT whip yaw sideways (maxYawFlip=${maxYawFlip.toFixed(4)})`);
+
+  // Verify pairwise separation across all 60 friends is cleanly above sepDist (>= 1.55u)
+  let minPairDist = Infinity;
+  for (let i = 0; i < pack.length; i++) {
+    for (let j = i + 1; j < pack.length; j++) {
+      const d = Math.hypot(
+        pack[i].mesh.position.x - pack[j].mesh.position.x,
+        pack[i].mesh.position.z - pack[j].mesh.position.z
+      );
+      if (d < minPairDist) minPairDist = d;
+    }
+  }
+  assert.ok(minPairDist >= 1.55, `Expected 60-friend pack min separation >= 1.55u without overlapping slots, got ${minPairDist.toFixed(3)}`);
+});
+
+test('Fix 3: Animals downhill ground-snapping, calibrated stride timeScale, 0.14 moving threshold, real airborne threshold, & hardened crossFadeToSemantic', () => {
+  const h = loadAnimalsHarness();
+  const Physics = makeTestPhysicsHelpers();
+
+  // 1. Running downhill on 20-deg slope keeps phys.onGround === true and never flips airborne/'jump'
+  const slopeTan = 0.36;
+  const downhillCtx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    P: { x: 0, y: -15, z: 30, vx: 0, vz: 4.5, facing: 0, dead: false },
+    glooms: [],
+    heightAt: (_x, z) => 2.0 - z * slopeTan,
+    WATER_Y: -5.0,
+  };
+  const drakeSp = { name: 'Ember Drake', plan: 'lizard', archetype: 'drake', color: 0xf78e5d };
+  const drakeMesh = new h.THREE.Group('DownhillDrake');
+  drakeMesh.position.set(0, 2.0, 0);
+  const drakeCtrl = h.Animals.attachToCritter(drakeMesh, drakeSp);
+  const drakeFollower = {
+    mesh: drakeMesh,
+    species: drakeSp,
+    hp: 4, maxHp: 4, hurtInvulnT: 0, flash: 0, atkCooldown: 0, attacker: null, defendT: 0, kx: 0, kz: 0,
+    phys: h.Animals.createPhysicsState(0, 2.0, 0, drakeSp),
+  };
+
+  for (let k = 0; k < 25; k++) {
+    h.Animals.updateFollowers([drakeFollower], 0.04, k * 0.04, downhillCtx);
+    assert.equal(drakeFollower.phys.onGround, true, `Tick ${k}: downhill drake must remain grounded`);
+    assert.notEqual(drakeCtrl.state.clip, 'jump', `Tick ${k}: downhill drake must NOT freeze in jump`);
+  }
+
+  // 2. Calibrated DEFAULT_REF_SPEEDS (drake walk=1.45), 0.14 moving threshold, [0.38, 2.35] timeScale, & relative run switch
+  drakeCtrl.update(0.016, 1.0, { mode: null, speed: 0.18, refSpeed: 0, isMoving: false, airborne: false, inWater: false });
+  assert.equal(drakeCtrl.state.clip, 'walk', 'Slow movement (0.18 > 0.14) must immediately trigger walk instead of idle floating');
+  assert.equal(drakeCtrl.state.timeScale, 0.38, 'Slow walk clamps cleanly at lower bound 0.38');
+
+  drakeCtrl.update(0.016, 1.1, { mode: null, speed: 2.1, refSpeed: 0, isMoving: true, airborne: false, inWater: false });
+  assert.equal(drakeCtrl.state.clip, 'walk', 'Drake at 2.1 u/s (< 1.45 * 1.85 = 2.68) stays in walk');
+  assert.ok(Math.abs(drakeCtrl.state.timeScale - 2.1 / 1.45) < 0.02, `Expected timeScale ~1.45, got ${drakeCtrl.state.timeScale}`);
+
+  drakeCtrl.update(0.016, 1.2, { mode: null, speed: 3.1, refSpeed: 0, isMoving: true, airborne: false, inWater: false });
+  assert.equal(drakeCtrl.state.clip, 'run', 'Drake at 3.1 u/s (> 1.45 * 1.85) transitions to run');
+
+  // 3. Hardened crossFadeToSemantic stops stale 3rd action & calls stopFading() on nextAct during rapid idle -> walk -> run
+  const foxMesh = new h.THREE.Group('RapidFox');
+  const foxCtrl = h.Animals.attachToCritter(foxMesh, { name: 'Frost Fox', plan: 'quad', color: 0xbfe3f0 });
+  const foxMixer = h.THREE._mixers[h.THREE._mixers.length - 1];
+  const getAct = (name) => {
+    for (const a of foxMixer.actions.values()) {
+      if (a.getClip().name === name) return a;
+    }
+    return null;
+  };
+  const idleAct = getAct('AnimalArmature|Idle');
+  const walkAct = getAct('AnimalArmature|Walk');
+  const runAct = getAct('AnimalArmature|Gallop');
+
+  foxCtrl.update(0.016, 0.1, { mode: 'walk', speed: 1.7, refSpeed: 0, isMoving: true });
+  assert.ok(walkAct.stopFadingCalls >= 1, 'crossFadeToSemantic must call stopFading() on nextAct');
+  foxCtrl.update(0.016, 0.12, { mode: 'run', speed: 5.2, refSpeed: 0, isMoving: true });
+  assert.equal(idleAct.playing, false, 'Rapid idle -> walk -> run must stop stale 3rd Idle action');
+  assert.equal(idleAct.weight, 0, 'Stopped stale 3rd action must have weight 0');
+  assert.ok(runAct.stopFadingCalls >= 1, 'Run action must call stopFading() before crossFadeTo');
 });

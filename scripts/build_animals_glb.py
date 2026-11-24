@@ -24,6 +24,7 @@ Key processing performed per archetype:
     embedded textures to 256px JPEG.
 """
 
+import argparse
 import base64
 import copy
 import io
@@ -105,6 +106,7 @@ ARCHETYPES = [
         "grounding": "centered",
         "smooth_crease_deg": None,  # Force full smooth normals across coincident vertices
         "inject_normals": True,
+        "perch_morph": True,
     },
     {
         "key": "kiwi",
@@ -589,6 +591,32 @@ def compute_fox_feline_deltas(positions, mesh_world_mat):
     return deltas
 
 
+def smoothstep(edge0, edge1, x):
+    t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def compute_bird_perch_deltas(positions):
+    """
+    Computes mesh-local POSITION morph deltas for the "Perch" morph target
+    on Parrot.glb: folds spread wings neatly back and flush along the bird's
+    flank while leaving the body, head, beak, and tail untouched.
+    """
+    deltas = []
+    for x, y, z in positions:
+        ax = abs(x)
+        if ax > 6.5:
+            t = smoothstep(6.5, 11.0, ax)
+            sx = 1.0 if x >= 0.0 else -1.0
+            tx = sx * (6.2 + (ax - 6.5) * 0.14)
+            tz = z - (ax - 6.5) * 0.85
+            ty = y * 0.45 - 1.2
+            deltas.append(((tx - x) * t, (ty - y) * t, (tz - z) * t))
+        else:
+            deltas.append((0.0, 0.0, 0.0))
+    return deltas
+
+
 def maybe_compress_image(raw_bytes, mime_type, max_kb):
     if max_kb is None or len(raw_bytes) <= max_kb * 1024:
         return raw_bytes, mime_type
@@ -642,10 +670,12 @@ def compile_archetype(spec):
     # 1. Rebuild meshes & primitives cleanly
     out_meshes = []
     mesh_target_counts = {}
+    src_mesh_target_counts = {}
     for mi, src_mesh in enumerate(src_gltf.get("meshes", [])):
         mesh_copy = copy.deepcopy(src_mesh)
         new_prims = []
         target_count_for_mesh = 0
+        src_target_count_for_mesh = 0
 
         for src_prim in src_mesh["primitives"]:
             prim = copy.deepcopy(src_prim)
@@ -690,11 +720,18 @@ def compile_archetype(spec):
                 for t_attr, t_acc in src_t.items():
                     nt[t_attr] = bb.copy_accessor(src_gltf, src_bin, t_acc, TARGET_ARRAY_BUFFER)
                 new_targets.append(nt)
+            src_target_count_for_mesh = max(src_target_count_for_mesh, len(new_targets))
 
             # Bake Feline morph target on fox.glb
             if spec.get("feline_morph") and mi == 0:
                 wm = mesh_world_by_mesh_idx.get(mi, mat4_identity())
                 deltas = compute_fox_feline_deltas(positions, wm)
+                delta_acc = bb.add_float_accessor(deltas, "VEC3", with_minmax=True, target=TARGET_ARRAY_BUFFER)
+                new_targets.append({"POSITION": delta_acc})
+
+            # Bake Perch morph target on bird.glb (Parrot.glb)
+            if spec.get("perch_morph") and mi == 0:
+                deltas = compute_bird_perch_deltas(positions)
                 delta_acc = bb.add_float_accessor(deltas, "VEC3", with_minmax=True, target=TARGET_ARRAY_BUFFER)
                 new_targets.append({"POSITION": delta_acc})
 
@@ -708,7 +745,20 @@ def compile_archetype(spec):
         if spec.get("feline_morph") and mi == 0:
             mesh_copy["weights"] = [0.0]
             mesh_copy.setdefault("extras", {})["targetNames"] = ["Feline"]
+        elif spec.get("perch_morph") and mi == 0:
+            weights = list(mesh_copy.get("weights", []))
+            while len(weights) < target_count_for_mesh - 1:
+                weights.append(0.0)
+            weights.append(0.0)
+            mesh_copy["weights"] = weights[:target_count_for_mesh]
+            extras = mesh_copy.setdefault("extras", {})
+            tnames = list(extras.get("targetNames", []))
+            while len(tnames) < target_count_for_mesh - 1:
+                tnames.append(f"target_{len(tnames)}")
+            tnames.append("Perch")
+            extras["targetNames"] = tnames[:target_count_for_mesh]
 
+        src_mesh_target_counts[mi] = src_target_count_for_mesh
         mesh_target_counts[mi] = target_count_for_mesh
         out_meshes.append(mesh_copy)
 
@@ -803,13 +853,24 @@ def compile_archetype(spec):
 
             if path == "weights":
                 node_mesh_idx = out_nodes[target["node"]].get("mesh")
+                old_cnt = src_mesh_target_counts.get(node_mesh_idx, 1) or 1
                 t_cnt = mesh_target_counts.get(node_mesh_idx, 1) or 1
-                expected = len(times) * t_cnt
-                vals = [float(v) if math.isfinite(v) else 0.0 for v in raw_vals]
-                if len(vals) < expected:
-                    vals.extend([0.0] * (expected - len(vals)))
-                elif len(vals) > expected:
-                    vals = vals[:expected]
+                n_keys = len(times)
+                src_vals = [float(v) if math.isfinite(v) else 0.0 for v in raw_vals]
+                if t_cnt > old_cnt and len(src_vals) == n_keys * old_cnt:
+                    vals = []
+                    pad_cnt = t_cnt - old_cnt
+                    for k in range(n_keys):
+                        base = k * old_cnt
+                        vals.extend(src_vals[base : base + old_cnt])
+                        vals.extend([0.0] * pad_cnt)
+                else:
+                    expected = n_keys * t_cnt
+                    vals = src_vals
+                    if len(vals) < expected:
+                        vals.extend([0.0] * (expected - len(vals)))
+                    elif len(vals) > expected:
+                        vals = vals[:expected]
             else:
                 vals = list(raw_vals)
                 expected_len = len(times) * 3 if interp == "CUBICSPLINE" else len(times)
@@ -932,18 +993,30 @@ def compile_archetype(spec):
     }
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Compile Blobby Worlds animal GLB assets.")
+    parser.add_argument("--only", nargs="+", help="Optional archetype key(s) to rebuild (e.g. --only bird)")
+    args = parser.parse_args(argv)
+    only_set = set(args.only) if args.only else None
+
+    specs = [s for s in ARCHETYPES if only_set is None or s["key"] in only_set]
+    if only_set is not None and not specs:
+        raise ValueError(f"No matching archetypes for --only {sorted(only_set)}")
+
     results = []
-    total_bytes = 0
-    for spec in ARCHETYPES:
+    for spec in specs:
         info = compile_archetype(spec)
         results.append(info)
-        total_bytes += info["bytes"]
         print(
             f"Built {info['key']:10s} | {info['bytes']:7d} B | h={info['height']:.3f}m "
             f"Y=[{info['minY']:+.3f},{info['maxY']:+.3f}] yaw={info['yaw']:+.3f} "
             f"| {len(info['clips']):2d} clips"
         )
+    total_bytes = sum(
+        os.path.getsize(os.path.join(ANIMALS_OUT_DIR, f"{s['key']}.glb"))
+        for s in ARCHETYPES
+        if os.path.exists(os.path.join(ANIMALS_OUT_DIR, f"{s['key']}.glb"))
+    )
     print(f"\nTotal 13 .glb size: {total_bytes:,} bytes ({total_bytes / (1024 * 1024):.2f} MB)")
     assert total_bytes <= MAX_TOTAL_GLB_BYTES, (
         f"Total .glb size {total_bytes} exceeds budget {MAX_TOTAL_GLB_BYTES}"

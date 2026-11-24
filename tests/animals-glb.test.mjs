@@ -462,6 +462,63 @@ test('bird.glb (Parrot) has smooth vertex normals shared across coincident posit
   );
 });
 
+test('bird.glb has baked Perch morph target at index 12 and 13-target padded parrot_A_ weights channel', () => {
+  const glbBuf = fs.readFileSync(path.join(ANIMALS_DIR, 'bird.glb'));
+  const { gltf, binBuf } = parseGlb(glbBuf);
+  const morphMesh = gltf.meshes[0];
+  assert.ok(morphMesh, 'bird.glb must have mesh 0');
+  const targetNames = morphMesh.extras?.targetNames;
+  assert.ok(Array.isArray(targetNames) && targetNames.length === 13, `Expected 13 targetNames on bird.glb, got ${targetNames?.length}`);
+  assert.equal(targetNames[12], 'Perch', 'Index 12 morph targetName must be "Perch"');
+  assert.ok(Array.isArray(morphMesh.weights) && morphMesh.weights.length === 13, 'bird.glb mesh.weights must have 13 entries');
+  assert.equal(morphMesh.weights[12], 0.0, 'Perch default mesh.weights[12] must be 0.0');
+
+  const prim = morphMesh.primitives[0];
+  assert.ok(Array.isArray(prim.targets) && prim.targets.length === 13, 'bird.glb primitive must have 13 morph targets');
+  const perchTarget = prim.targets[12];
+  assert.notEqual(perchTarget.POSITION, undefined, 'Perch morph target must define POSITION delta accessor');
+
+  const posAcc = readAccessor(gltf, binBuf, prim.attributes.POSITION);
+  const deltaMeta = gltf.accessors[perchTarget.POSITION];
+  assert.ok(Array.isArray(deltaMeta.min) && deltaMeta.min.length === 3, 'Perch POSITION delta accessor must define min[3]');
+  assert.ok(Array.isArray(deltaMeta.max) && deltaMeta.max.length === 3, 'Perch POSITION delta accessor must define max[3]');
+  const deltas = readAccessor(gltf, binBuf, perchTarget.POSITION);
+  assert.equal(deltas.length, posAcc.length);
+
+  // Body vertices (|x| <= 6.5) must stay completely untouched; outer wing vertices (|x| > 11) must fold inward toward flank & backward
+  let bodyMoved = 0;
+  let wingCount = 0;
+  let foldedCloserAndBack = 0;
+  for (let i = 0; i < posAcc.length; i++) {
+    const [x, , z] = posAcc[i];
+    const [dx, , dz] = deltas[i];
+    if (Math.abs(x) <= 6.5) {
+      if (Math.abs(dx) + Math.abs(deltas[i][1]) + Math.abs(dz) > 1e-6) bodyMoved++;
+    } else if (Math.abs(x) > 11.0) {
+      wingCount++;
+      const morphedX = x + dx;
+      const morphedZ = z + dz;
+      if (Math.abs(morphedX) < Math.abs(x) - 3.0 && morphedZ < z - 2.0) foldedCloserAndBack++;
+    }
+  }
+  assert.equal(bodyMoved, 0, 'Body/head/tail vertices (|x| <= 6.5) must have zero Perch delta');
+  assert.ok(wingCount > 50, 'Expected outer wing vertices on Parrot.glb');
+  assert.equal(foldedCloserAndBack, wingCount, 'All outer wing vertices must fold inward toward flank and backward');
+
+  // parrot_A_ weights animation channel MUST have output.count === input.count * 13 and index 12 === 0.0 per keyframe
+  const anim = (gltf.animations || []).find((a) => a.name.toLowerCase().includes('parrot'));
+  assert.ok(anim, 'bird.glb must retain parrot_A_ animation');
+  const wCh = anim.channels.find((c) => c.target.path === 'weights');
+  assert.ok(wCh, 'parrot_A_ must have weights channel');
+  const smp = anim.samplers[wCh.sampler];
+  const inTimes = readAccessor(gltf, binBuf, smp.input);
+  const outWeights = readAccessor(gltf, binBuf, smp.output);
+  assert.equal(outWeights.length, inTimes.length * 13, 'parrot_A_ weights output count must equal input.count * 13');
+  for (let k = 0; k < inTimes.length; k++) {
+    assert.equal(outWeights[k * 13 + 12], 0.0, `Keyframe ${k} Perch morph weight (index 12) must be padded to 0.0`);
+  }
+});
+
 test('assets/LICENSE-CC0.txt credits all 13 animal sources (CC0 1.0 & Parrot.glb MIT)', () => {
   const txt = fs.readFileSync(path.join(ROOT_DIR, 'assets', 'LICENSE-CC0.txt'), 'utf8');
   for (const term of ['Fox.glb', 'Horse_White.glb', 'Wolf.glb', 'Stag.glb', 'Velociraptor.glb', 'Asianladybeetle.glb', 'Wasp.glb', 'Parrot.glb', 'Kiwi.glb', 'BlueTang.glb', 'Koi.glb', 'Snake.glb', 'Manta_ray.glb', 'MIT']) {

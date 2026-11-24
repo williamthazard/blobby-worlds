@@ -61,6 +61,7 @@ const Animals = (() => {
     posX: 0,
     posY: 0,
     posZ: 0,
+    perchBlend: 0,
   };
   const _aiProcOpts = { idleTime: 0, airborne: false };
   const _aiBoltDir = typeof THREE !== 'undefined' && THREE.Vector3
@@ -170,15 +171,15 @@ const Animals = (() => {
   };
 
   const DEFAULT_REF_SPEEDS = {
-    fox: { walk: 2.8, run: 5.8 },
-    unicorn: { walk: 3.2, run: 6.6 },
-    wolf: { walk: 3.0, run: 6.2 },
-    stag: { walk: 3.2, run: 6.8 },
-    drake: { walk: 2.9, run: 6.0 },
-    beetle: { walk: 2.2, run: 4.5 },
-    firefly: { walk: 2.4, run: 4.8, fly: 3.6 },
-    bird: { walk: 2.6, run: 5.2, fly: 4.2 },
-    kiwi: { walk: 2.6, run: 5.2 },
+    fox: { walk: 1.7, run: 5.2 },
+    unicorn: { walk: 2.1, run: 6.0 },
+    wolf: { walk: 1.9, run: 5.6 },
+    stag: { walk: 2.2, run: 6.2 },
+    drake: { walk: 1.45, run: 5.2 },
+    beetle: { walk: 1.15, run: 2.7 },
+    firefly: { walk: 2.0, run: 4.2, fly: 3.4 },
+    bird: { walk: 2.2, run: 4.5, fly: 4.0 },
+    kiwi: { walk: 1.35, run: 2.8 },
     fish_tang: { swim: 2.6, swimFast: 5.2 },
     fish_koi: { swim: 2.6, swimFast: 5.2 },
     eel: { swim: 2.5, swimFast: 4.8 },
@@ -972,6 +973,8 @@ const Animals = (() => {
     ensureScratchMath(THREERef);
 
     const archetype = speciesToArchetype(species);
+    const spName = (species && species.name) || archetype;
+    const isRealBird = archetype === 'bird' && spName !== 'Wish';
     const procRoot = wrapProceduralRoot(rootMesh, THREERef);
 
     const state = {
@@ -983,10 +986,12 @@ const Animals = (() => {
       lookYaw: 0,
       lookPitch: 0,
       hurtFlash: 0,
+      perchBlend: 0,
     };
 
     let mixer = null;
     const actions = {};
+    const allActions = [];
     let activeAction = null;
     let activeSemantic = 'idle';
     let headBone = null;
@@ -995,6 +1000,12 @@ const Animals = (() => {
     let isZUpHead = false;
     let auraSprite = null;
     let auraBaseScale = 1.1;
+    let birdBodyPivot = null;
+    let birdLegs = null;
+    let birdLeftLeg = null;
+    let birdRightLeg = null;
+    let birdPerchMesh = null;
+    let birdPerchIdx = -1;
     const restResetBones = [];
 
     let hasLookTarget = false;
@@ -1018,6 +1029,13 @@ const Animals = (() => {
     function crossFadeToSemantic(wantSemantic, fadeDur, isOneShot) {
       const nextAct = actions[wantSemantic] || actions.idle;
       if (nextAct && nextAct !== activeAction) {
+        for (let i = 0; i < allActions.length; i++) {
+          const act = allActions[i];
+          if (act && act !== activeAction && act !== nextAct && typeof act.stop === 'function') {
+            act.stop();
+          }
+        }
+        if (typeof nextAct.stopFading === 'function') nextAct.stopFading();
         nextAct.reset();
         setActionLoop(nextAct, wantSemantic);
         if (isOneShot && THREERef && THREERef.LoopOnce !== undefined && typeof nextAct.setLoop === 'function') {
@@ -1035,6 +1053,11 @@ const Animals = (() => {
         activeAction = nextAct;
       } else if (nextAct && !isOneShot) {
         setActionLoop(nextAct, wantSemantic);
+        const clipObj = typeof nextAct.getClip === 'function' ? nextAct.getClip() : nextAct._clip;
+        const clipDur = clipObj && typeof clipObj.duration === 'number' ? clipObj.duration : 0;
+        if (nextAct.paused || (clipDur > 0.02 && nextAct.time >= clipDur - 0.01)) {
+          nextAct.time = 0;
+        }
         nextAct.paused = false;
         nextAct.enabled = true;
         if (typeof nextAct.setEffectiveWeight === 'function') nextAct.setEffectiveWeight(1);
@@ -1056,16 +1079,17 @@ const Animals = (() => {
         return m;
       }
       const spd = s.speed || 0;
-      const ref = s.refSpeed || 3.2;
+      const walkRef = s.refSpeed || getRefSpeed(archetype, 'walk');
       if (s.inWater) {
-        return spd > ref * 1.15 ? 'swimFast' : 'swim';
+        const swimRef = s.refSpeed || getRefSpeed(archetype, 'swim');
+        return spd > swimRef * 1.45 ? 'swimFast' : 'swim';
       }
       if (s.airborne) {
         return (archetype === 'bird' || archetype === 'firefly') ? 'fly' : 'jump';
       }
-      if (s.isMoving || spd > 0.25) {
+      if (s.isMoving || spd > 0.14) {
         if (archetype === 'bird' || (archetype === 'firefly' && spd > 1.8)) return 'fly';
-        return spd > ref * 1.25 ? 'run' : 'walk';
+        return spd > walkRef * 1.85 ? 'run' : 'walk';
       }
       return 'idle';
     }
@@ -1081,6 +1105,13 @@ const Animals = (() => {
         const nextAct = actions[semanticName] || actions.idle;
         if (nextAct) {
           if (nextAct !== activeAction) {
+            for (let i = 0; i < allActions.length; i++) {
+              const act = allActions[i];
+              if (act && act !== activeAction && act !== nextAct && typeof act.stop === 'function') {
+                act.stop();
+              }
+            }
+            if (typeof nextAct.stopFading === 'function') nextAct.stopFading();
             nextAct.reset();
             if (typeof nextAct.setLoop === 'function' && THREERef && THREERef.LoopOnce !== undefined) {
               nextAct.setLoop(THREERef.LoopOnce, 1);
@@ -1175,11 +1206,27 @@ const Animals = (() => {
       if (activeSemantic === 'walk' || activeSemantic === 'run' ||
           activeSemantic === 'swim' || activeSemantic === 'swimFast' || activeSemantic === 'fly') {
         const refSpd = s.refSpeed || getRefSpeed(archetype, activeSemantic);
-        ts = spd > 0.05 ? clamp(spd / Math.max(0.25, refSpd), 0.60, 1.75) : 1.0;
+        ts = spd > 0.05 ? clamp(spd / Math.max(0.25, refSpd), 0.38, 2.35) : 1.0;
       }
       state.timeScale = ts;
       if (activeAction && typeof activeAction.setEffectiveTimeScale === 'function') {
         activeAction.setEffectiveTimeScale(ts);
+      }
+
+      // Bird perching flight fade & flap pause
+      const perch = isRealBird ? clamp(s.perchBlend || 0, 0, 1) : 0;
+      state.perchBlend = perch;
+      if (isRealBird && activeAction) {
+        if (typeof activeAction.setEffectiveWeight === 'function') {
+          activeAction.setEffectiveWeight(1 - perch);
+        }
+        if (perch > 0.96) {
+          activeAction.paused = true;
+        } else if (!state.oneShot) {
+          activeAction.paused = false;
+          activeAction.enabled = true;
+          if (typeof activeAction.play === 'function') activeAction.play();
+        }
       }
 
       // 3. Reset un-keyed post-mixer offset bones to rest before mixer.update
@@ -1219,6 +1266,33 @@ const Animals = (() => {
         headBone.quaternion.multiply(_qYaw).multiply(_qPitch);
       }
 
+      if (isRealBird) {
+        if (birdPerchMesh && birdPerchMesh.morphTargetInfluences && birdPerchIdx >= 0) {
+          const inf = birdPerchMesh.morphTargetInfluences;
+          if (perch > 0.96) {
+            for (let m = 0; m < inf.length; m++) {
+              if (m !== birdPerchIdx) inf[m] = 0;
+            }
+          }
+          inf[birdPerchIdx] = perch;
+        }
+        const legRotX = 1.25 * (1 - perch);
+        if (birdLeftLeg && birdLeftLeg.rotation) birdLeftLeg.rotation.x = legRotX;
+        if (birdRightLeg && birdRightLeg.rotation) birdRightLeg.rotation.x = legRotX;
+        if (birdBodyPivot) {
+          const tNow = time || 0;
+          const breathBob = perch * Math.sin(tNow * 2.5 + twitchPhase) * 0.010;
+          if (birdBodyPivot.position) {
+            birdBodyPivot.position.y = 0.085 * perch + breathBob;
+          }
+          if (birdBodyPivot.rotation) {
+            birdBodyPivot.rotation.x = -0.26 * perch;
+            const idleScan = hasLookTarget ? state.lookYaw * 0.48 : Math.sin(tNow * 1.15 + twitchPhase) * 0.06;
+            birdBodyPivot.rotation.y = idleScan * perch;
+          }
+        }
+      }
+
       if ((earLBone || earRBone) && _qScratch) {
         const tw = Math.sin((time || 0) * 2.1 + twitchPhase);
         if (tw > 0.90) {
@@ -1249,6 +1323,7 @@ const Animals = (() => {
       isShaderRig: false,
       species,
       archetype,
+      birdScale: SPECIES_SCALES[spName] || 1.0,
       state,
       triggerOneShot,
       setLookTarget,
@@ -1279,6 +1354,7 @@ const Animals = (() => {
       const isLynx = spName === 'Moss Lynx';
 
       const spScale = SPECIES_SCALES[spName] || 1.0;
+      controller.birdScale = spScale;
       if (clone.scale && typeof clone.scale.set === 'function' && spScale !== 1.0) {
         clone.scale.set(spScale, spScale, spScale);
       }
@@ -1312,6 +1388,17 @@ const Animals = (() => {
             }
           }
 
+          if (hasMorphs && isRealBird) {
+            const dict = obj.morphTargetDictionary;
+            if (dict && dict.Perch !== undefined) {
+              birdPerchMesh = obj;
+              birdPerchIdx = dict.Perch;
+            } else if (obj.morphTargetInfluences.length >= 13) {
+              birdPerchMesh = obj;
+              birdPerchIdx = 12;
+            }
+          }
+
           obj.material = getCachedSpeciesMaterial(
             THREERef,
             TexturesRef,
@@ -1325,7 +1412,33 @@ const Animals = (() => {
         }
       });
 
-      attachFantasyAccents(species, archetype, clone, bones, ModelsRef);
+      if (isRealBird && typeof THREERef.Group === 'function' && Array.isArray(clone.children)) {
+        birdBodyPivot = new THREERef.Group();
+        birdBodyPivot.name = 'BirdBodyPivot';
+        const existingKids = clone.children.slice();
+        for (let i = 0; i < existingKids.length; i++) {
+          birdBodyPivot.add(existingKids[i]);
+        }
+        if (typeof clone.add === 'function') clone.add(birdBodyPivot);
+      }
+
+      attachFantasyAccents(species, archetype, birdBodyPivot || clone, bones, ModelsRef);
+
+      if (isRealBird && ModelsRef && typeof ModelsRef.makeBirdLegs === 'function') {
+        birdLegs = ModelsRef.makeBirdLegs(species && species.color);
+        if (birdLegs) {
+          if (birdLegs.position && typeof birdLegs.position.set === 'function') {
+            birdLegs.position.set(0, -0.28, -0.02);
+          }
+          if (typeof clone.add === 'function') clone.add(birdLegs);
+          if (birdLegs.userData) {
+            birdLeftLeg = birdLegs.userData.leftLeg || null;
+            birdRightLeg = birdLegs.userData.rightLeg || null;
+            if (birdLeftLeg && birdLeftLeg.rotation) birdLeftLeg.rotation.x = 1.25;
+            if (birdRightLeg && birdRightLeg.rotation) birdRightLeg.rotation.x = 1.25;
+          }
+        }
+      }
 
       if (species && species.rare) {
         const auraCol = species.auraColor !== undefined
@@ -1392,7 +1505,11 @@ const Animals = (() => {
         for (let i = 0; i < semKeys.length; i++) {
           const sk = semKeys[i];
           const clip = semClips[sk];
-          if (clip) actions[sk] = mixer.clipAction(clip);
+          if (clip) {
+            const act = mixer.clipAction(clip);
+            actions[sk] = act;
+            if (act && allActions.indexOf(act) < 0) allActions.push(act);
+          }
         }
         const initSem = archetype === 'fish_tang' || archetype === 'fish_koi' || archetype === 'manta' || archetype === 'eel'
           ? 'swim'
@@ -1760,18 +1877,26 @@ const Animals = (() => {
       }
     } else {
       phys.inWater = false;
-      phys.vy -= ANIMAL_GRAVITY * stepDt;
-      nextY = prevY + phys.vy * stepDt;
-      if (nextY <= supY) {
-        if (!phys.onGround && phys.vy < -2.0) landed = true;
+      const dropDelta = prevY - supY;
+      const canSnapDownhill = phys.onGround && phys.vy <= 0 && dropDelta >= 0 && dropDelta <= 0.28;
+      if (canSnapDownhill) {
         nextY = supY;
         phys.vy = 0;
         phys.onGround = true;
-      } else if (phys.onGround && phys.vy <= 0 && nextY <= supY + 0.06) {
-        nextY = supY;
-        phys.vy = 0;
-      } else if (nextY > supY + 0.06) {
-        phys.onGround = false;
+      } else {
+        phys.vy -= ANIMAL_GRAVITY * stepDt;
+        nextY = prevY + phys.vy * stepDt;
+        if (nextY <= supY) {
+          if (!phys.onGround && phys.vy < -2.0) landed = true;
+          nextY = supY;
+          phys.vy = 0;
+          phys.onGround = true;
+        } else if (phys.onGround && phys.vy <= 0 && nextY <= supY + 0.06) {
+          nextY = supY;
+          phys.vy = 0;
+        } else if (nextY > supY + 0.06) {
+          phys.onGround = false;
+        }
       }
     }
 
@@ -2484,7 +2609,7 @@ const Animals = (() => {
     return _aiDefaultPlayer;
   }
 
-  function syncEntityVisual(m, phys, dt, time, mode, refSpeed, hurtFlash, isMoving, airborne, c) {
+  function syncEntityVisual(m, phys, dt, time, mode, refSpeed, hurtFlash, isMoving, airborne, c, perchBlend) {
     const rig = m.userData && m.userData.animalRig;
     if (rig && typeof rig.update === 'function') {
       _aiAnimState.mode = mode;
@@ -2498,6 +2623,7 @@ const Animals = (() => {
       _aiAnimState.posX = m.position.x;
       _aiAnimState.posY = m.position.y;
       _aiAnimState.posZ = m.position.z;
+      _aiAnimState.perchBlend = perchBlend || 0;
       rig.update(dt, time, _aiAnimState);
       return;
     }
@@ -2821,21 +2947,37 @@ const Animals = (() => {
       const desVz = adjSpeed > 0 ? Math.cos(yaw) * adjSpeed : 0;
 
       if (aerial) {
-        let targetAlt = 0.75;
+        const isRealBird = arch === 'bird' && (!w.species || w.species.name !== 'Wish');
+        const onDryLand = hFn(pos.x, pos.z) > waterY + 0.05;
+        const isWildRest = w.state === 'graze' || w.state === 'rest' || w.state === 'curious' ||
+                           w.state === 'calmTrust' || w.state === 'tired';
+        const curSpd = w.phys ? w.phys.smoothSpd : 0;
+        const canWildPerch = isRealBird && isWildRest && onDryLand && curSpd < 0.7;
+        w.perchBlend = canWildPerch
+          ? Math.min(1, (w.perchBlend || 0) + 3.2 * aiDt)
+          : Math.max(0, (w.perchBlend || 0) - 4.5 * aiDt);
+
+        let targetAlt = 0.90;
         if (w.state === 'flee' || w.state === 'fleeGloom') {
           targetAlt = 1.25 + Math.sin(nowTime * 5.0 + i) * 0.18;
-        } else if (w.state === 'graze' || w.state === 'rest' || w.state === 'curious' ||
-                   w.state === 'calmTrust' || w.state === 'tired') {
-          targetAlt = arch === 'firefly' ? 0.55 : 0.08;
+        } else if (isWildRest) {
+          if (isRealBird) {
+            const spScale = (rig && rig.birdScale) || SPECIES_SCALES[(w.species && w.species.name) || ''] || 1.0;
+            const baseScale = m.scale && m.scale.x > 0 ? m.scale.x : 1.0;
+            const standAlt = 0.28 * spScale * baseScale;
+            const hoverAlt = 0.88 + Math.sin(nowTime * 2.2 + i) * 0.06;
+            targetAlt = hoverAlt + (standAlt - hoverAlt) * w.perchBlend;
+          } else {
+            targetAlt = arch === 'firefly' ? 0.55 : 0.08;
+          }
         } else {
-          targetAlt = (arch === 'bird' && w.species && w.species.archetype === 'songbird')
-            ? 0.35 + Math.sin(nowTime * 3.0 + i) * 0.12
-            : 0.90 + Math.sin(nowTime * 2.2 + i) * 0.14;
+          targetAlt = 0.90 + Math.sin(nowTime * 2.2 + i) * 0.10;
         }
         for (let s = 0; s < nSub; s++) {
           stepAerialPhysics(w, physDt, nowTime, desVx, desVz, targetAlt, c);
         }
       } else {
+        w.perchBlend = 0;
         for (let s = 0; s < nSub; s++) {
           stepLandPhysics(w, physDt, nowTime, desVx, desVz, c);
         }
@@ -2849,8 +2991,9 @@ const Animals = (() => {
       w.smoothSpd = phys.smoothSpd;
       w.gaitPhase = phys.gaitPhase;
 
-      const isFleeing = w.state === 'flee' || w.state === 'fleeGloom';
-      const isAirborne = aerial ? phys.airLift > 0.22 : (!phys.onGround && !phys.inWater);
+      const isAirborne = aerial
+        ? phys.airLift > 0.22
+        : (!phys.onGround && !phys.inWater && (phys.airLift > 0.26 || phys.vy > 1.2));
       const wildVisualMode = (!aerial && phys.inWater) ? null : mode;
       syncEntityVisual(
         m,
@@ -2858,11 +3001,12 @@ const Animals = (() => {
         aiDt,
         nowTime + i * 1.3,
         wildVisualMode,
-        isFleeing ? 5.6 : 2.6,
         0,
-        phys.smoothSpd > 0.25,
+        0,
+        phys.smoothSpd > 0.14,
         isAirborne,
-        c
+        c,
+        w.perchBlend || 0
       );
     }
   }
@@ -2974,6 +3118,8 @@ const Animals = (() => {
     const playerSpd = Math.hypot(P.vx || 0, P.vz || 0);
     const glooms = Array.isArray(c.glooms) ? c.glooms : null;
     const randFn = typeof c.rng === 'function' ? c.rng : Math.random;
+    const hFn = typeof c.heightAt === 'function' ? c.heightAt : defaultHeightZero;
+    const waterBaseY = c.WATER_Y !== undefined ? c.WATER_Y : ANIMAL_DEFAULT_WATER_Y;
     const PhysicsRef = getPhysRef(c);
 
     let fightersUsed = 0;
@@ -2995,6 +3141,7 @@ const Animals = (() => {
       const rig = m.userData && m.userData.animalRig;
       const arch = speciesToArchetype(f.species);
       const aerial = isAerialSpecies(f.species);
+      const isRealBird = arch === 'bird' && (!f.species || f.species.name !== 'Wish');
       const fStats = f.stats || null;
       const spdMult = (fStats && typeof fStats.spd === 'number')
         ? clamp(fStats.spd, CHASE_SPEED_MIN, CHASE_SPEED_MAX)
@@ -3034,6 +3181,7 @@ const Animals = (() => {
         if (!isSelfDefense) fightersUsed++;
         f._standT = 0;
         f._idlePhaseT = 0;
+        f.perchBlend = Math.max(0, (f.perchBlend || 0) - 4.5 * aiDt);
 
         const gp = combatTarget.mesh.position;
         const dx = gp.x - prevX;
@@ -3186,14 +3334,12 @@ const Animals = (() => {
             f._stuckT = Math.max(0, (f._stuckT || 0) - aiDt * 2.0);
           }
           if (distToPlayer > 38.0 || f._stuckT > 4.5) {
-            const hFn = typeof c.heightAt === 'function' ? c.heightAt : defaultHeightZero;
-            const waterY = c.WATER_Y !== undefined ? c.WATER_Y : ANIMAL_DEFAULT_WATER_Y;
             const regAng = pFacing + Math.PI + (((i % 7) - 3) * 0.34);
             const regDist = 3.6 + (i % 3) * 1.15;
             const rx = px + Math.sin(regAng) * regDist;
             const rz = pz + Math.cos(regAng) * regDist;
             const gh = hFn(rx, rz);
-            const ry = aerial ? Math.max(gh, waterY) + 0.9 : (P.swimming ? Math.max(gh, waterY - 0.35) : Math.max(gh, waterY));
+            const ry = aerial ? Math.max(gh, waterBaseY) + 0.9 : (P.swimming ? Math.max(gh, waterBaseY - 0.35) : Math.max(gh, waterBaseY));
             pos.x = rx;
             pos.y = ry;
             pos.z = rz;
@@ -3201,7 +3347,7 @@ const Animals = (() => {
             phys.vy = 0;
             phys.vz = 0;
             phys.onGround = !aerial && ry <= gh + 0.05;
-            phys.inWater = !aerial && ry < waterY;
+            phys.inWater = !aerial && ry < waterBaseY;
             f.kx = 0;
             f.kz = 0;
             f._stuckT = 0;
@@ -3214,7 +3360,7 @@ const Animals = (() => {
           f._stuckT = 0;
         }
 
-        // Compact Concentric Crescent Pack Formation behind/beside Starkeeper (scales cleanly to 25-100+ friends!)
+        // Wide Concentric Crescent Pack Formation behind/beside Starkeeper (adjacent slot spacing >= 1.88u, zero overlap!)
         let ring = 0;
         let idxInRing = i;
         let ringCap = 6;
@@ -3226,13 +3372,18 @@ const Animals = (() => {
         const side = (idxInRing % 2 === 0) ? 1 : -1;
         const pairStep = Math.floor(idxInRing / 2);
         const maxPairs = Math.max(1, Math.ceil(ringCap / 2));
-        const arcSpread = 0.55 + ((pairStep + 0.5) / maxPairs) * 1.65;
+        const arcSpread = 0.42 + (maxPairs > 1 ? (pairStep / (maxPairs - 1)) * 1.90 : 0.95);
         const flankAngle = pFacing + Math.PI + side * arcSpread;
-        const slotDist = 2.4 + ring * 1.75;
+        const slotDist = 2.65 + ring * 1.95;
         const slotX = px + Math.sin(flankAngle) * slotDist;
         const slotZ = pz + Math.cos(flankAngle) * slotDist;
 
-        // Boids separation between fellow followers (sepDist = 1.65u)
+        const dxSlot = slotX - prevX;
+        const dzSlot = slotZ - prevZ;
+        const distSlot = Math.hypot(dxSlot, dzSlot);
+        const arriveRadius = 2.0;
+
+        // Smooth quadratic clamped boids separation between fellow followers (sepDist = 1.65u)
         const sepDist = 1.65;
         const sepDistSq = sepDist * sepDist;
         let sepVx = 0;
@@ -3247,28 +3398,31 @@ const Animals = (() => {
           if (sd2 < sepDistSq) {
             if (sd2 < 1e-6) {
               const breakAng = i * 2.399963 + j * 0.7;
-              sepVx += Math.cos(breakAng) * 4.5;
-              sepVz += Math.sin(breakAng) * 4.5;
+              sepVx += Math.cos(breakAng) * 2.0;
+              sepVz += Math.sin(breakAng) * 2.0;
             } else {
               const sd = Math.sqrt(sd2);
               const push = (sepDist - sd) / sepDist;
-              sepVx += (sdx / sd) * push * 5.2;
-              sepVz += (sdz / sd) * push * 5.2;
+              const pushForce = push * push * 4.2;
+              sepVx += (sdx / sd) * pushForce;
+              sepVz += (sdz / sd) * pushForce;
             }
           }
         }
+        const sepMag = Math.hypot(sepVx, sepVz);
+        const sepMax = ((f._standT || 0) > 2.0 && distSlot < 1.8) ? 1.6 : 3.6;
+        if (sepMag > sepMax) {
+          const invSep = sepMax / sepMag;
+          sepVx *= invSep;
+          sepVz *= invSep;
+        }
 
-        const dxSlot = slotX - prevX;
-        const dzSlot = slotZ - prevZ;
-        const distSlot = Math.hypot(dxSlot, dzSlot);
-        const arriveRadius = 2.0;
-
-        if (distSlot > 0.35) {
-          // Catch-up sprint boost when falling behind Starkeeper (> 10u) so band keeps pace during sprints!
+        if (distSlot > 0.25) {
+          // Catch-up sprint boost when falling behind Starkeeper (> 10u) + continuous taper to zero at 0.25u
           const catchupCap = distSlot > 10.0 ? 13.5 : 10.5;
-          const baseSpd = Math.min(catchupCap, 2.2 + distSlot * 2.2) * spdMult;
-          const ramp = distSlot < arriveRadius ? Math.max(0.25, distSlot / arriveRadius) : 1.0;
-          const moveSpd = baseSpd * ramp;
+          const moveSpd = distSlot < arriveRadius
+            ? Math.min(catchupCap, ((distSlot - 0.25) / 1.75) * 6.6) * spdMult
+            : Math.min(catchupCap, 2.2 + distSlot * 2.2) * spdMult;
           desVx = (dxSlot / distSlot) * moveSpd + sepVx;
           desVz = (dzSlot / distSlot) * moveSpd + sepVz;
           lookYaw = Math.atan2(dxSlot, dzSlot);
@@ -3279,11 +3433,12 @@ const Animals = (() => {
           forceLookYaw = Math.hypot(sepVx, sepVz) < 0.25;
         }
 
-        if (aerial) {
-          targetAlt = f.celebrateT > 0
-            ? 1.55 + Math.sin(nowTime * 9 + i) * 0.25
-            : (0.78 + (ring % 2) * 0.22 + Math.sin(nowTime * 2.8 + i) * 0.14);
-        }
+        const hoverAlt = aerial
+          ? (f.celebrateT > 0
+              ? 1.55 + Math.sin(nowTime * 9 + i) * 0.25
+              : (0.94 + (ring % 2) * 0.16 + Math.sin(nowTime * 2.8 + i) * 0.10))
+          : 0;
+        if (aerial) targetAlt = hoverAlt;
 
         // Idle Grazing & Resting when Starkeeper stands still > 3.0s
         if (playerSpd < 0.35) {
@@ -3306,8 +3461,8 @@ const Animals = (() => {
               }
             }
           }
-          if (aerial) {
-            targetAlt = arch === 'firefly' ? 0.55 : 0.12;
+          if (aerial && !isRealBird) {
+            targetAlt = arch === 'firefly' ? 0.55 : 1.05 + Math.sin(nowTime * 2.5 + i) * 0.12;
           }
           f._idlePhaseT = (f._idlePhaseT || 0) + aiDt;
           const cycle = (f._idlePhaseT + i * 1.1) % 10.5;
@@ -3331,6 +3486,21 @@ const Animals = (() => {
           }
         } else if (rig && typeof rig.clearLookTarget === 'function') {
           rig.clearLookTarget();
+        }
+
+        if (isRealBird) {
+          const floorY = hFn(prevX, prevZ);
+          const canPerch = isIdleSettled && floorY > waterBaseY + 0.05 && !(f.celebrateT > 0) && !combatTarget && phys.smoothSpd < 0.7;
+          f.perchBlend = canPerch
+            ? Math.min(1, (f.perchBlend || 0) + 3.2 * aiDt)
+            : Math.max(0, (f.perchBlend || 0) - 4.5 * aiDt);
+          if (f.perchBlend > 0.001) {
+            const spScale = (rig && rig.birdScale) || SPECIES_SCALES[(f.species && f.species.name) || ''] || 1.0;
+            const standAlt = 0.28 * spScale * (f._baseScale || 1.0);
+            targetAlt = hoverAlt + (standAlt - hoverAlt) * f.perchBlend;
+          }
+        } else {
+          f.perchBlend = 0;
         }
       }
 
@@ -3356,7 +3526,9 @@ const Animals = (() => {
       f.smoothSpd = phys.smoothSpd;
       f.gaitPhase = phys.gaitPhase;
 
-      const isAirborne = aerial ? phys.airLift > 0.22 : (!phys.onGround && !phys.inWater);
+      const isAirborne = aerial
+        ? phys.airLift > 0.22
+        : (!phys.onGround && !phys.inWater && (phys.airLift > 0.26 || phys.vy > 1.2));
       const hurtNorm = f.flash > 0 ? Math.min(1, f.flash / 0.3) : 0;
       syncEntityVisual(
         m,
@@ -3364,11 +3536,12 @@ const Animals = (() => {
         aiDt,
         nowTime + i * 1.7,
         (isIdleSettled && (aerial || !phys.inWater)) ? mode : null,
-        combatTarget ? 5.6 : 3.2,
+        0,
         hurtNorm,
-        phys.smoothSpd > 0.25,
+        phys.smoothSpd > 0.14,
         isAirborne,
-        c
+        c,
+        f.perchBlend || 0
       );
     }
   }
@@ -3774,6 +3947,7 @@ const Animals = (() => {
       _aiAnimState.posX = pos.x;
       _aiAnimState.posY = pos.y;
       _aiAnimState.posZ = pos.z;
+      _aiAnimState.perchBlend = 0;
       rig.update(aiDt, nowTime, _aiAnimState);
     } else {
       const ModelsRef = getModelsRef(c);

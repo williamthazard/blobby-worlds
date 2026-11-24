@@ -308,11 +308,13 @@ function makeMockTHREE() {
       this.clampWhenFinished = false;
       this.playing = false;
       this.crossFades = [];
+      this.stopFadingCalls = 0;
     }
     getClip() { return this._clip; }
     reset() { this.time = 0; this.enabled = true; this.paused = false; return this; }
     play() { this.enabled = true; this.playing = true; return this; }
     stop() { this.playing = false; this.weight = 0; return this; }
+    stopFading() { this.stopFadingCalls++; return this; }
     setLoop(mode) { this.loop = mode; return this; }
     setEffectiveTimeScale(s) { this.timeScale = s; return this; }
     setEffectiveWeight(w) { this.weight = w; return this; }
@@ -1087,7 +1089,7 @@ test('semantic clip routing, shared-clip one-shot LoopRepeat resumption, head lo
 
   knightCtrl.update(0.016, 0.2, { mode: 'run', speed: 12.0, refSpeed: 4.5, isMoving: true });
   assert.equal(knightCtrl.state.clip, 'run');
-  assert.equal(knightCtrl.state.timeScale, 1.75);
+  assert.equal(knightCtrl.state.timeScale, 2.35);
 
   knightCtrl.triggerOneShot('heavyAttack', 0.20);
   knightCtrl.update(0.016, 0.25, { mode: 'idle', speed: 0 });
@@ -2081,4 +2083,58 @@ test('Task 4 regressions: 30-deg downhill no-jump, side-slope roll sign, surface
     h.Enemies.updateGlooms([], 0.016, 0.1, dynCtx);
     assert.equal(spawnCalls, 4, 'updateGlooms should read live getLit()/getSanctuary() to compute targetCount');
   }
+});
+
+test('Fix 3: Enemies calibrated DEFAULT_REF_SPEEDS, 0.14 moving threshold, real airborne threshold, [0.38, 2.35] timeScale, & hardened crossFadeToSemantic', () => {
+  const h = loadEnemiesHarness();
+
+  // 1. Calibrated walk=1.65 on knight, 0.14 moving threshold, relative run switch (1.65 * 1.85 = 3.0525), [0.38, 2.35] timeScale
+  const kRoot = h.Models.makeGloom(h.Enemies.TIERS.knight);
+  const kCtrl = h.Enemies.attachToGloom(kRoot, h.Enemies.TIERS.knight);
+  const kMixer = h.THREE._mixers[0];
+  const findAct = (name) => {
+    for (const act of kMixer.actions.values()) {
+      if (act.getClip().name === name) return act;
+    }
+    return null;
+  };
+  const idleAct = findAct('HumanArmature|Idle_swordRight');
+  const walkAct = findAct('HumanArmature|Walking');
+  const runAct = findAct('HumanArmature|Run_swordRight');
+
+  kCtrl.update(0.016, 0.1, { mode: null, speed: 0.18, refSpeed: 0, isMoving: false, airborne: false });
+  assert.equal(kCtrl.state.clip, 'walk', 'Slow movement (0.18 > 0.14) must immediately step walk');
+  assert.equal(kCtrl.state.timeScale, 0.38, 'Slow walk clamps cleanly at lower bound 0.38');
+  assert.ok(walkAct.stopFadingCalls >= 1, 'crossFadeToSemantic must call stopFading() on nextAct');
+
+  kCtrl.update(0.016, 0.2, { mode: null, speed: 2.5, refSpeed: 0, isMoving: true, airborne: false });
+  assert.equal(kCtrl.state.clip, 'walk', 'Knight at 2.5 u/s (< 1.65 * 1.85 = 3.05) stays in walk');
+  assert.ok(Math.abs(kCtrl.state.timeScale - 2.5 / 1.65) < 0.02, `Expected knight walk timeScale ~1.515, got ${kCtrl.state.timeScale}`);
+
+  kCtrl.update(0.016, 0.22, { mode: null, speed: 3.9, refSpeed: 0, isMoving: true, airborne: false });
+  assert.equal(kCtrl.state.clip, 'run', 'Knight at 3.9 u/s (> 1.65 * 1.85) switches to run');
+  assert.equal(idleAct.playing, false, 'Rapid idle -> walk -> run must stop stale Idle action');
+  assert.equal(idleAct.weight, 0);
+  assert.ok(runAct.stopFadingCalls >= 1);
+
+  // 2. Real airborne threshold in updateGlooms: small airLift (0.12 <= 0.26) & vy (0.5 <= 1.2) keeps enemy out of jump!
+  const { ctx, glooms } = makeCombatCtx(h);
+  const pugMesh = h.Models.makeGloom(h.Enemies.TIERS.puglin);
+  const pugCtrl = h.Enemies.attachToGloom(pugMesh, h.Enemies.TIERS.puglin);
+  const pug = h.Enemies.createGloomState(pugMesh, h.Enemies.TIERS.puglin, 0, 2.0, 6.0);
+  pug.phys = { onGround: false, vy: 0.4, airLift: 0.12, smoothSpd: 1.5, facing: 0, bankRoll: 0 };
+  pugMesh.position.y = 2.12;
+  glooms.push(pug);
+  h.Enemies.updateGlooms(glooms, 0.016, 0.5, ctx);
+  assert.notEqual(pugCtrl.state.clip, 'jump', 'Small terrain micro-lift (<= 0.26u, vy <= 1.2) must NOT freeze legs in jump');
+
+  // 3. Shared oneShot clip resumption wraps time = 0 when near clip end
+  const sharedIdle = findAct('HumanArmature|Idle_swordRight');
+  kCtrl.update(0.016, 0.3, { mode: 'idle', speed: 0 });
+  kCtrl.triggerOneShot('hit', 0.15);
+  sharedIdle.time = 0.795; // within 0.01 of mock duration 0.80
+  kCtrl.update(0.10, 0.4, { mode: 'idle', speed: 0 });
+  kCtrl.update(0.06, 0.46, { mode: 'idle', speed: 0 });
+  assert.equal(kCtrl.state.clip, 'idle');
+  assert.ok(sharedIdle.time < 0.2, `Resumed shared idle clip must wrap time to 0 before advancing, got ${sharedIdle.time}`);
 });

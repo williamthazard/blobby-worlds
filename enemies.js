@@ -447,13 +447,13 @@ const Enemies = (() => {
   // ---------- 2. EnemyRig ----------
 
   const DEFAULT_REF_SPEEDS = {
-    puglin: { walk: 2.2, run: 4.4 },
-    imp: { walk: 2.5, run: 4.9 },
-    weaver: { walk: 2.4, run: 4.8 },
-    stinger: { walk: 3.2, run: 5.2, fly: 5.2 },
-    knight: { walk: 2.3, run: 4.5 },
-    behemoth: { walk: 2.2, run: 4.2 },
-    stalker: { walk: 1.9, run: 3.6 },
+    puglin: { walk: 1.5, run: 3.8 },
+    imp: { walk: 1.65, run: 4.2 },
+    weaver: { walk: 1.75, run: 3.6 },
+    stinger: { walk: 3.0, run: 4.8, fly: 4.8 },
+    knight: { walk: 1.65, run: 3.9 },
+    behemoth: { walk: 1.95, run: 3.9 },
+    stalker: { walk: 1.55, run: 3.2 },
   };
 
   // Curated shadow-beast PBR palettes for CC0 monsters (sRGB hex linearized once)
@@ -1072,6 +1072,7 @@ const Enemies = (() => {
 
     let mixer = null;
     const actions = {};
+    const allActions = [];
     let activeAction = null;
     let activeSemantic = state.clip;
     let headBone = null;
@@ -1234,6 +1235,13 @@ const Enemies = (() => {
     function crossFadeToSemantic(wantSemantic, fadeDur, isOneShot) {
       const nextAct = actions[wantSemantic] || actions.idle;
       if (nextAct && nextAct !== activeAction) {
+        for (let i = 0; i < allActions.length; i++) {
+          const act = allActions[i];
+          if (act && act !== activeAction && act !== nextAct && typeof act.stop === 'function') {
+            act.stop();
+          }
+        }
+        if (typeof nextAct.stopFading === 'function') nextAct.stopFading();
         nextAct.reset();
         setActionLoop(nextAct, wantSemantic, isOneShot);
         nextAct.paused = false;
@@ -1247,6 +1255,11 @@ const Enemies = (() => {
         activeAction = nextAct;
       } else if (nextAct && !isOneShot) {
         setActionLoop(nextAct, wantSemantic, false);
+        const clipObj = typeof nextAct.getClip === 'function' ? nextAct.getClip() : nextAct._clip;
+        const clipDur = clipObj && typeof clipObj.duration === 'number' ? clipObj.duration : 0;
+        if (nextAct.paused || (clipDur > 0.02 && nextAct.time >= clipDur - 0.01)) {
+          nextAct.time = 0;
+        }
         nextAct.paused = false;
         nextAct.enabled = true;
         if (typeof nextAct.setEffectiveWeight === 'function') nextAct.setEffectiveWeight(1);
@@ -1276,15 +1289,15 @@ const Enemies = (() => {
       }
       if (s.dead) return 'death';
       const spd = s.speed || 0;
-      const ref = s.refSpeed || getRefSpeed(archetype, 'walk');
+      const walkRef = s.refSpeed || getRefSpeed(archetype, 'walk');
       if (archetype === 'stinger' || tier.aerial) {
         return 'fly';
       }
       if (s.airborne) {
         return 'jump';
       }
-      if (s.isMoving || spd > 0.25) {
-        return spd > ref * 1.15 ? 'run' : 'walk';
+      if (s.isMoving || spd > 0.14) {
+        return spd > walkRef * 1.85 ? 'run' : 'walk';
       }
       return 'idle';
     }
@@ -1300,6 +1313,13 @@ const Enemies = (() => {
         const nextAct = actions[semanticName] || actions.idle;
         if (nextAct) {
           if (nextAct !== activeAction) {
+            for (let i = 0; i < allActions.length; i++) {
+              const act = allActions[i];
+              if (act && act !== activeAction && act !== nextAct && typeof act.stop === 'function') {
+                act.stop();
+              }
+            }
+            if (typeof nextAct.stopFading === 'function') nextAct.stopFading();
             nextAct.reset();
             if (typeof nextAct.setLoop === 'function' && THREERef && THREERef.LoopOnce !== undefined) {
               nextAct.setLoop(THREERef.LoopOnce, 1);
@@ -1386,7 +1406,7 @@ const Enemies = (() => {
       let ts = 1.0;
       if (activeSemantic === 'walk' || activeSemantic === 'run' || activeSemantic === 'fly') {
         const refSpd = s.refSpeed || getRefSpeed(archetype, activeSemantic);
-        ts = spd > 0.05 ? clamp(spd / Math.max(0.25, refSpd), 0.60, 1.75) : 1.0;
+        ts = spd > 0.05 ? clamp(spd / Math.max(0.25, refSpd), 0.38, 2.35) : 1.0;
       }
       state.timeScale = ts;
       if (activeAction && typeof activeAction.setEffectiveTimeScale === 'function') {
@@ -1536,7 +1556,11 @@ const Enemies = (() => {
         for (let i = 0; i < semKeys.length; i++) {
           const sk = semKeys[i];
           const clip = semClips[sk];
-          if (clip) actions[sk] = mixer.clipAction(clip);
+          if (clip) {
+            const act = mixer.clipAction(clip);
+            actions[sk] = act;
+            if (act && allActions.indexOf(act) < 0) allActions.push(act);
+          }
         }
         const initSem = (archetype === 'stinger' || tier.aerial) ? 'fly' : 'idle';
         const startAct = actions[initSem] || actions.idle;
@@ -2903,13 +2927,13 @@ const Enemies = (() => {
         _eAnimState.mode = g.state === 'roll' ? 'roll' : null;
         _eAnimState.speed = phys.smoothSpd;
         _eAnimState.refSpeed = 0;
-        _eAnimState.airborne = !phys.onGround && !isUnderwater && !isAerial;
+        _eAnimState.airborne = !phys.onGround && !isUnderwater && !isAerial && (phys.airLift > 0.26 || phys.vy > 1.2);
         _eAnimState.inWater = isUnderwater;
         _eAnimState.dead = !!g.dead || g.hp <= 0;
         _eAnimState.windingUp = windingUp;
         _eAnimState.lunging = g.state === 'lunge';
         _eAnimState.hurtFlash = g.flash || 0;
-        _eAnimState.isMoving = phys.smoothSpd > 0.25;
+        _eAnimState.isMoving = phys.smoothSpd > 0.14;
         _eAnimState.facingYaw = m.rotation ? m.rotation.y : g.dir;
         _eAnimState.posX = m.position.x;
         _eAnimState.posY = m.position.y;
