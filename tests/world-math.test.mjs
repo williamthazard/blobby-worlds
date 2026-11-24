@@ -797,7 +797,7 @@ function loadFullWorldWithMocks() {
 
   vm.runInNewContext(
     code +
-      '\nthis.__World = { WATER_Y, CHUNK, VIEW_RADIUS, DAY_SKY_MAX_LIT, scene, camera, renderer, sun, hemiLight, heightAt, terrainNormalAt, climateAt, surfaceAt, terrainColor, getNearbyColliders, setTotemCollider, clearTotemCollider, updateChunks, setQuality, getQuality, setSkyProgress, updateEnvironment, addConstellation, constellationNameFor, landSpot, waterSpot, chunks };',
+      '\nthis.__World = { WATER_Y, CHUNK, VIEW_RADIUS, DAY_SKY_MAX_LIT, scene, camera, renderer, sun, hemiLight, heightAt, terrainNormalAt, climateAt, surfaceAt, terrainColor, getNearbyColliders, setTotemCollider, clearTotemCollider, updateChunks, setQuality, getQuality, getViewRadius, updateChunkCulling, isChunkCulled, setSkyProgress, updateEnvironment, addConstellation, constellationNameFor, landSpot, waterSpot, chunks };',
     sandbox
   );
 
@@ -1524,4 +1524,128 @@ test('World + real Env integration is zero-GC in steady-state updateEnvironment 
     W.updateEnvironment(4.0, 12 + f * 0.1, -10, 1.0 + f * 0.016, 0.016);
   }
   assert.equal(allocCount, 0, `Steady-state updateEnvironment must allocate ZERO THREE objects, got ${allocCount}`);
+});
+
+test('Fast quality tier: 3x3 chunk grid, pixel ratio <= 0.9, no shadow pass, closer mist, leaner grass', () => {
+  const { W } = loadFullWorldWithMocks();
+
+  assert.equal(W.getQuality(), 'high');
+  W.setQuality('fast');
+  assert.equal(W.getQuality(), 'fast', 'setQuality must accept the fast tier');
+  assert.equal(W.getViewRadius(), 1, 'Fast must stream a 3x3 chunk grid (view radius 1)');
+  assert.ok(W.renderer.getPixelRatio() <= 0.9, `Fast pixel ratio must be <= 0.9, got ${W.renderer.getPixelRatio()}`);
+  assert.equal(W.sun.castShadow, false, 'Fast tier must disable the heavy shadow pass');
+  assert.equal(W.renderer.shadowMap.enabled, true, 'shadowMap flag stays on; castShadow gates the pass');
+
+  // 3x3 grid: streaming around a point must settle at exactly 9 chunks
+  for (let i = 0; i < 20; i++) W.updateChunks(0, 0);
+  assert.equal(W.chunks.size, 9, `Expected exactly 9 chunks on Fast, got ${W.chunks.size}`);
+
+  // Closer mist on the next environment update (fast: far ~78, high/balanced: ~124)
+  W.updateEnvironment(1.6, 0, 0, 1.0, 0.016, '');
+  assert.ok(W.scene.fog.far < 100, `Fast fog far must be closer (<100), got ${W.scene.fog.far}`);
+
+  // Leaner grass: find a big continent, then compare per-chunk grass counts across tiers
+  let landX = 0;
+  let landZ = 0;
+  let foundLand = false;
+  for (let r = 200; r < 600 && !foundLand; r += 24) {
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+      const tx = Math.cos(a) * r;
+      const tz = Math.sin(a) * r;
+      if (W.heightAt(tx, tz) > 2.5) {
+        landX = tx;
+        landZ = tz;
+        foundLand = true;
+        break;
+      }
+    }
+  }
+  assert.ok(foundLand, 'Must find a land continent for grass comparison');
+  for (let i = 0; i < 20; i++) W.updateChunks(landX, landZ);
+  let fastGrassMax = 0;
+  for (const chunk of W.chunks.values()) {
+    for (const gm of chunk.grassMeshes) fastGrassMax = Math.max(fastGrassMax, gm.count);
+  }
+  assert.ok(fastGrassMax > 0, 'Expected instanced grass on Fast tier land chunks');
+  assert.ok(fastGrassMax <= 14 * 14, `Fast grass per chunk must be <= 196 (14x14 grid), got ${fastGrassMax}`);
+
+  // Back to Balanced restores shadow pass, pixel ratio cap and the 7x7 grid
+  W.setQuality('balanced');
+  assert.equal(W.getViewRadius(), 3);
+  assert.equal(W.sun.castShadow, true, 'Balanced must re-enable the shadow pass');
+  assert.ok(W.renderer.getPixelRatio() <= 1.25);
+  for (let i = 0; i < 60; i++) W.updateChunks(landX, landZ);
+  assert.ok(W.chunks.size >= 49, `Expected >=49 chunks on Balanced, got ${W.chunks.size}`);
+  W.updateEnvironment(1.6, 0, 0, 1.0, 0.016, '');
+  assert.ok(W.scene.fog.far > 110, `Balanced fog far must be distant (>110), got ${W.scene.fog.far}`);
+
+  // Balanced grass density on the same continent exceeds Fast's 14x14 per-chunk cap
+  let balancedGrassMax = 0;
+  for (const chunk of W.chunks.values()) {
+    for (const gm of chunk.grassMeshes) balancedGrassMax = Math.max(balancedGrassMax, gm.count);
+  }
+  assert.ok(balancedGrassMax > fastGrassMax, `Balanced grass ${balancedGrassMax} must exceed Fast ${fastGrassMax}`);
+});
+
+test('Per-chunk frustum culling hides chunks behind the camera and restores them on turn', () => {
+  const { W } = loadFullWorldWithMocks();
+  W.setQuality('fast');
+  for (let i = 0; i < 20; i++) W.updateChunks(0, 0);
+  assert.equal(W.chunks.size, 9);
+
+  // Perspective camera (fov 60, aspect 1, near 0.1, far 600) at origin looking toward -Z
+  const f = 1 / Math.tan((60 * Math.PI / 180) / 2);
+  const near = 0.1;
+  const far = 600;
+  const proj = { elements: new Float32Array(16) };
+  proj.elements[0] = f;
+  proj.elements[5] = f;
+  proj.elements[10] = (far + near) / (near - far);
+  proj.elements[11] = -1;
+  proj.elements[14] = (2 * far * near) / (near - far);
+  const identity = { elements: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) };
+  const cam = {
+    position: { x: 0, y: 1.6, z: 0 },
+    projectionMatrix: proj,
+    matrixWorldInverse: identity,
+    updateMatrixWorld() {},
+  };
+
+  W.updateChunkCulling(cam);
+  assert.equal(W.isChunkCulled(0, -1), false, 'chunk directly in front must stay visible');
+  assert.equal(W.isChunkCulled(0, 0), false, 'camera chunk must stay visible');
+  assert.equal(W.isChunkCulled(-1, -1), false, 'front-left diagonal chunk must stay visible');
+  assert.equal(W.isChunkCulled(0, 1), true, 'chunk behind the camera must be culled');
+  assert.equal(W.isChunkCulled(1, 1), true, 'chunk behind-right must be culled');
+  assert.equal(W.isChunkCulled(-1, 1), true, 'chunk behind-left must be culled');
+
+  // Culled chunk meshes must actually be hidden
+  const behind = [...W.chunks.values()].find(c => c.cx === 0 && c.cz === 1);
+  for (const m of behind.meshes) {
+    assert.equal(m.visible, false, 'culled chunk mesh must have visible=false');
+  }
+  const front = [...W.chunks.values()].find(c => c.cx === 0 && c.cz === -1);
+  for (const m of front.meshes) {
+    assert.equal(m.visible, true, 'visible chunk mesh must stay visible=true');
+  }
+
+  // Turn the camera 180 degrees: culled chunks swap, previously hidden meshes restore
+  const turned = { elements: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) };
+  turned.elements[0] = -1;
+  turned.elements[10] = -1;
+  W.updateChunkCulling({ ...cam, matrixWorldInverse: turned });
+  assert.equal(W.isChunkCulled(0, -1), true, 'previously front chunk must cull after 180 turn');
+  assert.equal(W.isChunkCulled(0, 1), false, 'previously culled chunk must restore after 180 turn');
+  for (const m of behind.meshes) {
+    assert.equal(m.visible, true, 'restored chunk mesh must become visible again');
+  }
+});
+
+test('Low-end detection helpers: camera without matrices is a safe no-op', () => {
+  const { W } = loadFullWorldWithMocks();
+  W.updateChunkCulling(null);
+  W.updateChunkCulling({ position: { x: 0, y: 0, z: 0 } });
+  W.updateChunkCulling({ projectionMatrix: { elements: new Float32Array(16) } });
+  assert.equal(W.isChunkCulled(0, 0), false, 'no culling state must be written without a valid camera');
 });

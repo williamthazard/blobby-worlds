@@ -2609,7 +2609,29 @@ const Animals = (() => {
     return _aiDefaultPlayer;
   }
 
+  // Animation LOD: distant critters in large 25-100+ companion bands animate on a
+  // staggered cadence so big packs don't saturate low-end (Chromebook) CPUs.
+  const ANIM_LOD_NEAR = 20;  // full animation every frame
+  const ANIM_LOD_MID = 34;   // every 2nd frame
+  const ANIM_LOD_FAR = 3;    // beyond MID: every 3rd frame
+  function animLodStep(dist) {
+    if (dist <= ANIM_LOD_NEAR) return 1;
+    if (dist <= ANIM_LOD_MID) return 2;
+    return ANIM_LOD_FAR;
+  }
+
   function syncEntityVisual(m, phys, dt, time, mode, refSpeed, hurtFlash, isMoving, airborne, c, perchBlend) {
+    // LOD gate: always animate hurt reactions; stagger distant idle/walk poses.
+    // `time` arrives pre-staggered per entity (nowTime + i * 1.7), which doubles as the phase.
+    const pRef = c && typeof getPlayerRef === 'function' ? getPlayerRef(c) : null;
+    const lodDist = pRef
+      ? Math.hypot(m.position.x - (pRef.x || 0), m.position.z - (pRef.z || 0))
+      : 0;
+    const lodStep = animLodStep(lodDist);
+    if (lodStep > 1 && !(hurtFlash > 0)) {
+      const frameId = Math.floor((time || 0) * 30);
+      if (frameId % lodStep !== 0) return;
+    }
     const rig = m.userData && m.userData.animalRig;
     if (rig && typeof rig.update === 'function') {
       _aiAnimState.mode = mode;
@@ -3988,5 +4010,8 @@ const Animals = (() => {
     initAquatic,
     updateAquatic,
     updateWish,
+    animLodStep,
+    ANIM_LOD_NEAR,
+    ANIM_LOD_MID,
   };
 })();

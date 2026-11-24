@@ -20,7 +20,7 @@
 
 const WATER_Y = 0;
 const CHUNK = 32;
-const VIEW_RADIUS = 3;
+let VIEW_RADIUS = 3; // streamed chunk radius: 3 (7x7) on High/Balanced, 1 (3x3) on Fast
 const DAY_SKY_MAX_LIT = 8;
 
 const HALF_CHUNK = CHUNK * 0.5;
@@ -240,6 +240,9 @@ let terrainColor = null;
 let updateChunks = () => {};
 let setQuality = () => {};
 let getQuality = () => 'high';
+let getViewRadius = () => 3;
+let updateChunkCulling = () => {};
+let isChunkCulled = () => false;
 let setSkyProgress = () => {};
 let getSkyProgress = () => 0;
 let updateEnvironment = () => {};
@@ -249,16 +252,74 @@ let worldLandmarks = null;
 if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   // ---------- scene, renderer & lighting ----------
 
+  // body.low-fx lets CSS drop costly backdrop-filter blur panels on Fast tier
+  function applyLowFxClass(mode) {
+    if (typeof document === 'undefined' || !document.body || !document.body.classList) return;
+    document.body.classList.toggle('low-fx', mode === 'fast');
+  }
+
+  // ---------- low-end device detection: ChromeOS & software GPUs boot into Fast ----------
+  const _LOW_GPU_RE = /swiftshader|llvmpipe|softpipe|angle \(software|basic render|software renderer/;
+  function detectLowEndDevice() {
+    try {
+      const ua = (typeof navigator !== 'undefined' && navigator && navigator.userAgent)
+        ? String(navigator.userAgent)
+        : '';
+      const isCros = /\bCrOS\b/.test(ua);
+      let softwareGPU = false;
+      if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+        const probe = document.createElement('canvas');
+        const gl = probe && typeof probe.getContext === 'function'
+          ? (probe.getContext('webgl') || probe.getContext('experimental-webgl'))
+          : null;
+        if (gl) {
+          const dbgExt = gl.getExtension ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+          if (dbgExt) {
+            const gpuStr = String(gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) || '') + ' ' +
+              String(gl.getParameter(dbgExt.UNMASKED_VENDOR_WEBGL) || '');
+            softwareGPU = _LOW_GPU_RE.test(gpuStr.toLowerCase());
+          }
+          const loseCtx = gl.getExtension ? gl.getExtension('WEBGL_lose_context') : null;
+          if (loseCtx && typeof loseCtx.loseContext === 'function') loseCtx.loseContext();
+        }
+      }
+      return { isCros, softwareGPU, lowEnd: isCros || softwareGPU };
+    } catch (_) {
+      return { isCros: false, softwareGPU: false, lowEnd: false };
+    }
+  }
+  const lowEndDevice = detectLowEndDevice();
+
+  // Per-tier performance budget: pixel ratio, shadow pass, water/grass/flower density,
+  // streamed chunk radius (3x3 = 9 chunks on Fast), and mist distance.
+  const QUALITY_SETTINGS = {
+    high:     { pixelRatio: 2,    shadowRes: 2048, shadows: true,  wRes: 24, grassGrid: 36, flowerCap: 72, viewRadius: 3, fogNear: 42, fogFar: 124 },
+    balanced: { pixelRatio: 1.25, shadowRes: 1024, shadows: true,  wRes: 16, grassGrid: 25, flowerCap: 36, viewRadius: 3, fogNear: 42, fogFar: 124 },
+    fast:     { pixelRatio: 0.9,  shadowRes: 512,  shadows: false, wRes: 8,  grassGrid: 14, flowerCap: 16, viewRadius: 1, fogNear: 26, fogFar: 78 },
+  };
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1c2745);
-  scene.fog = new THREE.Fog(0x3a4a6a, 38, 118);
+  scene.fog = new THREE.Fog(0x3a4a6a, lowEndDevice.lowEnd ? 26 : 38, lowEndDevice.lowEnd ? 78 : 118);
 
   camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 600);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({
+    antialias: !lowEndDevice.lowEnd,
+    powerPreference: 'high-performance',
+  });
   renderer.setSize(innerWidth, innerHeight);
-  let qualityMode = 'high';
-  renderer.setPixelRatio(Math.min(typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1, 2));
+  let qualityMode = lowEndDevice.lowEnd ? 'fast' : 'high';
+  VIEW_RADIUS = QUALITY_SETTINGS[qualityMode].viewRadius;
+  renderer.setPixelRatio(Math.min(
+    typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1,
+    QUALITY_SETTINGS[qualityMode].pixelRatio
+  ));
+
+  if (typeof Env !== 'undefined' && Env && typeof Env.setQuality === 'function') {
+    Env.setQuality(qualityMode);
+  }
+  applyLowFxClass(qualityMode);
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
@@ -282,7 +343,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   const maxTexSize = (renderer.capabilities && renderer.capabilities.maxTextureSize)
     ? renderer.capabilities.maxTextureSize
     : 2048;
-  const initShadowRes = Math.min(2048, maxTexSize);
+  const initShadowRes = Math.min(QUALITY_SETTINGS[qualityMode].shadowRes, maxTexSize);
   sun.shadow.mapSize.set(initShadowRes, initShadowRes);
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.04;
@@ -295,6 +356,12 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   sun.shadow.camera.updateProjectionMatrix();
   scene.add(sun);
   scene.add(sun.target);
+
+  // Fast tier boots without the heavy shadow pass
+  if (qualityMode === 'fast') {
+    sun.castShadow = false;
+    sun.shadow.mapSize.set(Math.min(QUALITY_SETTINGS.fast.shadowRes, maxTexSize), Math.min(QUALITY_SETTINGS.fast.shadowRes, maxTexSize));
+  }
 
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
@@ -1467,7 +1534,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     }
     if (!chunk.hasWater) return;
 
-    const wRes = qualityMode === 'high' ? 24 : 16;
+    const wRes = (QUALITY_SETTINGS[qualityMode] || QUALITY_SETTINGS.high).wRes;
     const ox = chunk.cx * CHUNK;
     const oz = chunk.cz * CHUNK;
     const wGeo = new THREE.PlaneGeometry(CHUNK, CHUNK, wRes, wRes);
@@ -1510,11 +1577,12 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
 
     if (!chunk.hasDryLand) return;
 
-    const grassGrid = qualityMode === 'high' ? 36 : 25;
+    const qSet = QUALITY_SETTINGS[qualityMode] || QUALITY_SETTINGS.high;
+    const grassGrid = qSet.grassGrid;
     const grassCap = grassGrid * grassGrid;
     const cellStep = (CHUNK - 0.8) / grassGrid;
     const startOff = -HALF_CHUNK + 0.4 + cellStep * 0.5;
-    const flowerCap = qualityMode === 'high' ? FLOWER_CAP_HIGH : FLOWER_CAP_BAL;
+    const flowerCap = Math.min(qSet.flowerCap, FLOWER_CAP_HIGH);
     const flowerTries = flowerCap * 3;
 
     // Stratified jittered grid covers 100% of meadows seamlessly without bald spots or wasted retries
@@ -1997,19 +2065,24 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     return qualityMode;
   };
 
+  getViewRadius = function getViewRadiusImpl() {
+    return VIEW_RADIUS;
+  };
+
   setQuality = function setQualityImpl(mode) {
-    const next = mode === 'balanced' ? 'balanced' : 'high';
+    const next = QUALITY_SETTINGS[mode] ? mode : (QUALITY_SETTINGS[qualityMode] ? qualityMode : 'high');
     if (next === qualityMode) return qualityMode;
     qualityMode = next;
+    const q = QUALITY_SETTINGS[next];
 
     if (typeof Env !== 'undefined' && Env && typeof Env.setQuality === 'function') {
       Env.setQuality(next);
     }
 
     const dpr = typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1;
-    renderer.setPixelRatio(Math.min(dpr, next === 'high' ? 2 : 1.25));
+    renderer.setPixelRatio(Math.min(dpr, q.pixelRatio));
 
-    const targetShadow = Math.min(next === 'high' ? 2048 : 1024, maxTexSize);
+    const targetShadow = Math.min(q.shadowRes, maxTexSize);
     if (sun.shadow.mapSize.x !== targetShadow || sun.shadow.mapSize.y !== targetShadow) {
       sun.shadow.mapSize.set(targetShadow, targetShadow);
       if (sun.shadow.map) {
@@ -2017,6 +2090,21 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
         sun.shadow.map = null;
       }
     }
+
+    // Fast tier skips the heavy shadow pass entirely
+    sun.castShadow = q.shadows;
+
+    // Chunk streaming radius: 7x7 grid on High/Balanced, 3x3 on Fast (horizon ring follows)
+    if (VIEW_RADIUS !== q.viewRadius) {
+      VIEW_RADIUS = q.viewRadius;
+      buildHorizonRing();
+    }
+
+    // Closer mist baseline; updateEnvironment scales fog per frame from these tiers
+    scene.fog.near = q.fogNear;
+    scene.fog.far = q.fogFar;
+
+    applyLowFxClass(next);
 
     for (const chunk of chunks.values()) {
       for (let i = 0; i < chunk.grassMeshes.length; i++) {
@@ -2035,10 +2123,95 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     return qualityMode;
   };
 
+  // ---------- per-chunk frustum culling (covers world-space instanced grass/flowers/props) ----------
+  // Grass/flower/prop instances live in world coordinates on shared geometry, so per-mesh
+  // three.js culling is disabled. Instead we test one bounding sphere per chunk (centered on
+  // the chunk, tall enough for tree canopies) against the camera frustum and toggle the whole
+  // chunk's mesh visibility. This skips behind-the-camera geometry on every quality tier.
+  const _frustumPlanes = new Float32Array(24); // 6 planes * (a, b, c, d)
+  const _cullClipMat = new Float32Array(16);
+  // Covers chunk half-diagonal (22.6) + prop widths, deep sea floor (-20) and tall
+  // tree canopies on alpine peaks (~33 top) around the sphere center at WATER_Y + 6.
+  const CHUNK_CULL_RADIUS = 27;
+
+  function extractFrustumPlanes(proj, viewInv) {
+    const p = proj.elements;
+    const v = viewInv.elements;
+    if (!p || !v) return false;
+    // M = projection * viewInverse (column-major)
+    for (let c = 0; c < 4; c++) {
+      const vc0 = v[c * 4];
+      const vc1 = v[c * 4 + 1];
+      const vc2 = v[c * 4 + 2];
+      const vc3 = v[c * 4 + 3];
+      for (let r = 0; r < 4; r++) {
+        _cullClipMat[c * 4 + r] = p[r] * vc0 + p[4 + r] * vc1 + p[8 + r] * vc2 + p[12 + r] * vc3;
+      }
+    }
+    // Gribb-Hartmann plane extraction from combined clip matrix rows
+    for (let k = 0; k < 6; k++) {
+      const rowA = k >> 1;             // 0 = x, 1 = y, 2 = z rows
+      const sign = (k & 1) === 0 ? 1 : -1; // left/bottom/near add, right/top/far subtract
+      const i0 = rowA;
+      const i1 = 4 + rowA;
+      const i2 = 8 + rowA;
+      const i3 = 12 + rowA;
+      const a = _cullClipMat[3] + sign * _cullClipMat[i0];
+      const b = _cullClipMat[7] + sign * _cullClipMat[i1];
+      const cC = _cullClipMat[11] + sign * _cullClipMat[i2];
+      const d = _cullClipMat[15] + sign * _cullClipMat[i3];
+      const inv = 1 / (Math.hypot(a, b, cC) || 1);
+      _frustumPlanes[k * 4] = a * inv;
+      _frustumPlanes[k * 4 + 1] = b * inv;
+      _frustumPlanes[k * 4 + 2] = cC * inv;
+      _frustumPlanes[k * 4 + 3] = d * inv;
+    }
+    return true;
+  }
+
+  function sphereInFrustum(x, y, z, r) {
+    for (let k = 0; k < 6; k++) {
+      const o = k * 4;
+      if (_frustumPlanes[o] * x + _frustumPlanes[o + 1] * y + _frustumPlanes[o + 2] * z + _frustumPlanes[o + 3] < -r) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  updateChunkCulling = function updateChunkCullingImpl(cam) {
+    if (!cam || !cam.projectionMatrix || !cam.matrixWorldInverse) return;
+    if (!cam.projectionMatrix.elements || !cam.matrixWorldInverse.elements) return;
+    if (typeof cam.updateMatrixWorld === 'function') cam.updateMatrixWorld();
+    if (!extractFrustumPlanes(cam.projectionMatrix, cam.matrixWorldInverse)) return;
+    for (const chunk of chunks.values()) {
+      const visible = sphereInFrustum(chunk.cx * CHUNK, WATER_Y + 6, chunk.cz * CHUNK, CHUNK_CULL_RADIUS);
+      if (chunk.culled === !visible) continue; // already in desired state
+      chunk.culled = !visible;
+      for (let i = 0; i < chunk.meshes.length; i++) {
+        const mesh = chunk.meshes[i];
+        if (mesh && mesh.visible !== visible) mesh.visible = visible;
+      }
+    }
+  };
+
+  isChunkCulled = function isChunkCulledImpl(cx, cz) {
+    const chunk = chunks.get(chunkKey(cx, cz));
+    return !!(chunk && chunk.culled);
+  };
+
   // ---------- distant horizon ocean ring ----------
 
   const horizonGroup = new THREE.Group();
-  {
+  const _horizonMeshes = [];
+  function buildHorizonRing() {
+    for (let i = 0; i < _horizonMeshes.length; i++) {
+      const m = _horizonMeshes[i];
+      horizonGroup.remove(m);
+      if (m.geometry && typeof m.geometry.dispose === 'function') m.geometry.dispose();
+    }
+    _horizonMeshes.length = 0;
+
     const R_IN = (VIEW_RADIUS + 0.5) * CHUNK;
     const R_OUT = 460;
     const BAND = R_OUT - R_IN;
@@ -2061,7 +2234,9 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     east.position.set(MID, 0, 0);
 
     horizonGroup.add(north, south, west, east);
+    _horizonMeshes.push(north, south, west, east);
   }
+  buildHorizonRing();
   scene.add(horizonGroup);
 
   // ---------- atmospheric sky dome & constellations ----------
@@ -2448,6 +2623,12 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       fogFar = 58;
       _fogColor.copy(SKY.deepFog);
       scene.background.copy(SKY.deepBg);
+    } else if (qualityMode === 'fast') {
+      // Closer mist pairs with the 3x3 chunk grid so the horizon never shows a raw edge
+      fogNear = 26 + skyProgress * 6;
+      fogFar = 78 + skyProgress * 20;
+      _fogColor.copy(_skyBot);
+      scene.background.copy(_skyBot);
     } else {
       fogNear = 42 + skyProgress * 10;
       fogFar = 124 + skyProgress * 46;

@@ -3821,13 +3821,21 @@ if (soundBtn) {
   });
 }
 
+const QUALITY_ORDER = ['high', 'balanced', 'fast'];
+const QUALITY_LABELS = { high: 'Quality: High', balanced: 'Quality: Balanced', fast: 'Quality: Fast' };
+function qualityLabelFor(mode) {
+  return QUALITY_LABELS[mode] || QUALITY_LABELS.high;
+}
+
 const qualityBtn = document.getElementById('qualityBtn');
 if (qualityBtn) {
-  qualityBtn.textContent = getQuality() === 'balanced' ? 'Quality: Balanced' : 'Quality: High';
+  qualityBtn.textContent = qualityLabelFor(getQuality());
   qualityBtn.addEventListener('click', e => {
-    const next = getQuality() === 'high' ? 'balanced' : 'high';
+    const cur = getQuality();
+    const idx = QUALITY_ORDER.indexOf(cur);
+    const next = QUALITY_ORDER[(idx + 1) % QUALITY_ORDER.length] || 'high';
     const applied = setQuality(next);
-    e.target.textContent = applied === 'balanced' ? 'Quality: Balanced' : 'Quality: High';
+    e.target.textContent = qualityLabelFor(applied);
   });
 }
 
@@ -4211,12 +4219,65 @@ renderHeartsUI();
 let lastTime = performance.now();
 let time = 0;
 
+// FPS watchdog: any device that drops under ~16 FPS for 3 straight seconds steps
+// one quality tier down (High -> Balanced -> Fast) so Chromebooks self-heal.
+const perfWatchdog = {
+  enabled: true,
+  fpsThreshold: 16,
+  lowSecondsForStep: 3,
+  windowSec: 0,
+  frames: 0,
+  lowStreak: 0,
+  cooldown: 0,
+  lastFps: 60,
+  stepdowns: 0,
+  reset() {
+    this.windowSec = 0;
+    this.frames = 0;
+    this.lowStreak = 0;
+    this.cooldown = 0;
+    this.lastFps = 60;
+  },
+  tick(dt) {
+    if (!this.enabled) return null;
+    this.cooldown = Math.max(0, this.cooldown - dt);
+    this.windowSec += dt;
+    this.frames++;
+    if (this.windowSec < 1) return null;
+    this.lastFps = this.frames / this.windowSec;
+    this.frames = 0;
+    this.windowSec = 0;
+    if (this.lastFps >= this.fpsThreshold) {
+      this.lowStreak = 0;
+      return null;
+    }
+    this.lowStreak++;
+    if (this.lowStreak < this.lowSecondsForStep || this.cooldown > 0) return null;
+    const stepped = stepQualityDown();
+    this.lowStreak = 0;
+    this.cooldown = 10;
+    if (stepped) this.stepdowns++;
+    return stepped;
+  },
+};
+
+function stepQualityDown() {
+  const cur = getQuality();
+  if (cur === 'fast') return null;
+  const applied = setQuality(cur === 'high' ? 'balanced' : 'fast');
+  if (qualityBtn) qualityBtn.textContent = qualityLabelFor(applied);
+  toast(`Dropping to ${QUALITY_LABELS[applied] || applied} to keep the game smooth`, 3000);
+  return applied;
+}
+
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
+  perfWatchdog.tick(dt);
   if (!started) {
     updateChunks(P.x, P.z);
+    updateChunkCulling(camera);
     return;
   }
   time += dt;
@@ -4224,6 +4285,7 @@ function loop(now) {
   if (hitStopT > 0) {
     hitStopT = Math.max(0, hitStopT - dt);
     updateCombatVfx(dt);
+    updateChunkCulling(camera);
     renderer.render(scene, camera);
     return;
   }
@@ -4257,6 +4319,7 @@ function loop(now) {
     ? currentRegion.id
     : (fallbackReg && fallbackReg.id ? fallbackReg.id : '');
   updateEnvironment(camera.position.y, P.x, P.z, time, dt, activeRegionId);
+  updateChunkCulling(camera);
   if (typeof Shaders !== 'undefined' && Shaders && typeof Shaders.setClothMotion === 'function') {
     const envWindGust = (typeof Env !== 'undefined' && Env && typeof Env.getWindGust === 'function')
       ? Env.getWindGust()
@@ -4351,6 +4414,11 @@ const debugHandle = {
   getNearbyColliders,
   setQuality,
   getQuality,
+  getViewRadius,
+  isChunkCulled,
+  updateChunkCulling,
+  perfWatchdog,
+  stepQualityDown,
   setSkyProgress,
   lightTotem,
   shoot,

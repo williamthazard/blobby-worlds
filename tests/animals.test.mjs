@@ -3151,3 +3151,125 @@ test('Fix 3: Animals downhill ground-snapping, calibrated stride timeScale, 0.14
   assert.equal(idleAct.weight, 0, 'Stopped stale 3rd action must have weight 0');
   assert.ok(runAct.stopFadingCalls >= 1, 'Run action must call stopFading() before crossFadeTo');
 });
+
+test('Animation LOD: distant critters animate on a staggered cadence, hurt ones always animate', () => {
+  const h = loadAnimalsHarness();
+  const Physics = makeTestPhysicsHelpers();
+  assert.equal(typeof h.Animals.animLodStep, 'function', 'animLodStep must be exported');
+  assert.equal(h.Animals.animLodStep(10), 1, 'near critters animate every frame');
+  assert.equal(h.Animals.animLodStep(25), 2, 'mid-range critters animate every 2nd frame');
+  assert.equal(h.Animals.animLodStep(80), 3, 'far critters animate every 3rd frame');
+  assert.equal(h.Animals.ANIM_LOD_NEAR, 20);
+  assert.equal(h.Animals.ANIM_LOD_MID, 34);
+
+  const scene = new h.THREE.Group('Scene');
+  const wild = [];
+  const makeWild = (name, archetype, x, z) => {
+    const sp = { name, plan: 'quad', archetype };
+    const mesh = new h.THREE.Group(name);
+    mesh.position.set(x, 0, z);
+    h.Animals.attachToCritter(mesh, sp);
+    scene.add(mesh);
+    const rig = mesh.userData.animalRig;
+    assert.ok(rig && typeof rig.update === 'function', 'mock rig must expose update()');
+    const counter = { calls: 0 };
+    const origUpdate = rig.update.bind(rig);
+    rig.update = (...args) => { counter.calls++; return origUpdate(...args); };
+    const entry = {
+      mesh,
+      species: sp,
+      displayName: name,
+      dir: 0,
+      turnT: 99,
+      hopT: 0,
+      gaitPhase: 0,
+      smoothSpd: 0,
+      dustAcc: 0,
+      state: 'wander',
+      stateT: 99,
+      fleeT: 0,
+      trustT: 0,
+      perchBlend: 0,
+      phys: h.Animals.createPhysicsState(x, 0, z, sp),
+      lookCand: { mesh, maxDist: 8, yOffset: 0.45 },
+      lockCand: { kind: 'wild', ref: null, mesh, yOffset: 0.45 },
+      counter,
+    };
+    wild.push(entry);
+    return entry;
+  };
+
+  const near = makeWild('Near Fox', 'fox', 5, 0);
+  const mid = makeWild('Mid Wolf', 'wolf', 25, 0);
+  const far = makeWild('Far Bear', 'bear', 60, 0);
+
+  const ctx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    scene,
+    P: { x: 0, y: 0, z: 0, vx: 0, vz: 0, facing: 0 },
+    glooms: [],
+    heightAt: () => 0,
+    WATER_Y: -0.35,
+    rng: () => 0.5,
+  };
+
+  // 9 frames at ~30fps: far critters run a third of the rigs, mid half, near all
+  for (let f = 0; f < 9; f++) {
+    h.Animals.updateWild(wild, 0.016, f * 0.016, ctx);
+  }
+  assert.ok(Math.hypot(far.mesh.position.x, far.mesh.position.z) > 34, 'far critter must stay beyond the LOD threshold');
+  assert.equal(near.counter.calls, 9, `near critter must animate every frame, got ${near.counter.calls}`);
+  // Cadence floors make exact counts depend on the per-entity time stagger; assert the
+  // throttled budgets: far animates at most every 3rd frame (+1 boundary), mid at most every 2nd.
+  assert.ok(far.counter.calls <= 5, `far critter must throttle to <=5 of 9 frames (got ${far.counter.calls})`);
+  assert.ok(mid.counter.calls <= 5, `mid critter must throttle to <=5 of 9 frames (got ${mid.counter.calls})`);
+
+  // Hurt companions always animate so hit reactions never freeze, even far away
+  // (wild critters never flash; companions pass hurtFlash into the visual sync)
+  const mesh = new h.THREE.Group('Hurt Wolf');
+  mesh.position.set(32, 0, 0);
+  const sp = { name: 'Timber Wolf', plan: 'quad', archetype: 'wolf' };
+  h.Animals.attachToCritter(mesh, sp);
+  const rig = mesh.userData.animalRig;
+  const counter = { calls: 0 };
+  const origUpdate = rig.update.bind(rig);
+  rig.update = (...args) => { counter.calls++; return origUpdate(...args); };
+  const hurtFollower = {
+    mesh,
+    species: sp,
+    displayName: 'Hurt Wolf',
+    hp: 3,
+    maxHp: 3,
+    hurtInvulnT: 0,
+    flash: 0,
+    atkCooldown: 0,
+    attacker: null,
+    defendT: 0,
+    kx: 0,
+    kz: 0,
+    phys: h.Animals.createPhysicsState(32, 0, 0, sp),
+  };
+  const fCtx = {
+    THREE: h.THREE,
+    Physics,
+    Models: h.Models,
+    P: { x: 0, y: 0, z: 0, vx: 0, vz: 0, facing: 0, dead: false },
+    glooms: [],
+    heightAt: () => 0,
+    WATER_Y: -0.35,
+  };
+  // Unhurried and far: throttled cadence
+  for (let f = 0; f < 9; f++) {
+    h.Animals.updateFollowers([hurtFollower], 0.016, f * 0.016, fCtx);
+  }
+  assert.ok(counter.calls <= 5, `far follower must throttle (got ${counter.calls})`);
+  // Flashing: every frame so the hit reaction plays
+  hurtFollower.flash = 0.2;
+  const before = counter.calls;
+  for (let f = 0; f < 9; f++) {
+    h.Animals.updateFollowers([hurtFollower], 0.016, 1.0 + f * 0.016, fCtx);
+  }
+  assert.equal(counter.calls - before, 9, 'hurt far follower must animate every frame while flashing');
+});

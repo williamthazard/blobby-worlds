@@ -848,6 +848,19 @@
     #playBtn { margin-top: 12px; padding: 8px 36px; }
     #controls { margin-top: 10px; line-height: 1.45; }
   }
+
+  /* Fast (low) tier: drop costly backdrop blur on every HUD panel (body.low-fx set by world.js) */
+  body.low-fx .pill,
+  body.low-fx #airWrap,
+  body.low-fx #heartsHud,
+  body.low-fx #questBar,
+  body.low-fx .hudBtn,
+  body.low-fx #controlsPanel,
+  body.low-fx #toast,
+  body.low-fx .touchBtn {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 </style>
 </head>
 <body>

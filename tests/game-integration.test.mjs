@@ -701,7 +701,18 @@ function makeMockDocument({ withCanvas = false } = {}) {
         width: 0,
         height: 0,
         _data: null,
-        getContext() {
+        getContext(type) {
+          if (type === 'webgl' || type === 'experimental-webgl') {
+            // Minimal WebGL probe stub for world.js low-end device detection
+            return {
+              getExtension: (name) => (name === 'WEBGL_debug_renderer_info'
+                ? { UNMASKED_RENDERER_WEBGL: 37446, UNMASKED_VENDOR_WEBGL: 37445 }
+                : null),
+              getParameter: (p) => (p === 37446
+                ? (doc._gpuRenderer || 'ANGLE (PowerVR SGX)')
+                : p === 37445 ? 'Google Inc.' : ''),
+            };
+          }
           return {
             font: '',
             fillStyle: '',
@@ -741,9 +752,10 @@ function makeMockDocument({ withCanvas = false } = {}) {
   return doc;
 }
 
-function loadGameHarness({ hash = '', fullWorld = false } = {}) {
+function loadGameHarness({ hash = '', fullWorld = false, userAgent = '', gpuRenderer = '' } = {}) {
   const THREE = makeMockThree();
-  const doc = makeMockDocument({ withCanvas: fullWorld });
+  const doc = makeMockDocument({ withCanvas: fullWorld, gpuRenderer });
+  doc._gpuRenderer = gpuRenderer;
   const rafQueue = [];
 
   const audioCode = fs.readFileSync(new URL('../audio.js', import.meta.url), 'utf8');
@@ -900,8 +912,11 @@ function loadGameHarness({ hash = '', fullWorld = false } = {}) {
       waterSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: -4.0 }),
       constellationNameFor: (n) => 'Constellation ' + n,
       addConstellation: () => {},
-      setQuality: (m) => { quality = m === 'balanced' ? 'balanced' : 'high'; return quality; },
+      setQuality: (m) => { quality = (m === 'balanced' || m === 'fast') ? m : 'high'; return quality; },
       getQuality: () => quality,
+      getViewRadius: () => 3,
+      isChunkCulled: () => false,
+      updateChunkCulling: () => {},
       setSkyProgress: (lit) => { skyProgress = lit; },
       updateChunks: () => {},
       updateEnvironment: () => {},
@@ -911,6 +926,7 @@ function loadGameHarness({ hash = '', fullWorld = false } = {}) {
     });
   }
 
+  sandbox.navigator = { userAgent };
   sandbox.globalThis = sandbox;
 
   const chunksToRun = fullWorld
@@ -995,6 +1011,8 @@ test('game.js exposes window.__GAME_DEBUG__, wires Physics/Models, and toggles q
     'P', 'Physics', 'Models', 'Shaders', 'Textures', 'Env', 'scene', 'camera', 'renderer',
     'glooms', 'cocoons', 'pickups', 'wild', 'followers', 'getTotem',
     'heightAt', 'terrainNormalAt', 'getNearbyColliders', 'setQuality',
+    'getViewRadius', 'isChunkCulled', 'updateChunkCulling',
+    'perfWatchdog', 'stepQualityDown',
     'setSkyProgress', 'lightTotem', 'shoot', 'spawnGloom', 'spawnCocoon',
   ]) {
     assert.ok(key in dbg, `debug handle must expose ${key}`);
@@ -1003,9 +1021,13 @@ test('game.js exposes window.__GAME_DEBUG__, wires Physics/Models, and toggles q
   assert.ok(dbg.wish.mesh.userData.wings && dbg.wish.mesh.userData.halo, 'wish must be created via Models.makeWish()');
 
   const qBtn = doc.getElementById('qualityBtn');
+  // 3-tier cycle: High -> Balanced -> Fast -> High
   qBtn.click();
   assert.equal(getQualityState(), 'balanced');
   assert.equal(qBtn.textContent, 'Quality: Balanced');
+  qBtn.click();
+  assert.equal(getQualityState(), 'fast');
+  assert.equal(qBtn.textContent, 'Quality: Fast');
   qBtn.click();
   assert.equal(getQualityState(), 'high');
   assert.equal(qBtn.textContent, 'Quality: High');
@@ -2334,3 +2356,72 @@ test('Natural offscreen creature spawning keeps enemies & wild critters out of f
   assert.ok(preDist >= 10 && preDist <= 40, `Pre-start spawnWild must use [10..40] opening ring, got ${preDist}`);
 });
 
+
+test('ChromeOS devices boot with antialias off, start in Fast tier, and set body.low-fx', () => {
+  const { dbg, doc } = loadGameHarness({
+    fullWorld: true,
+    userAgent: 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  });
+  assert.ok(dbg, 'debug handle must exist on full-world CrOS boot');
+  assert.equal(dbg.renderer.opts.antialias, false, 'CrOS boot must disable MSAA');
+  assert.equal(dbg.getQuality(), 'fast', 'CrOS boot must start in the Fast tier');
+  assert.equal(dbg.getViewRadius(), 1, 'CrOS boot must stream a 3x3 chunk grid');
+  assert.ok(doc.body.classList.contains('low-fx'), 'Fast tier must set body.low-fx for CSS blur drop');
+
+  // Manual cycle from Fast wraps to High and clears low-fx
+  const applied = dbg.setQuality('high');
+  assert.equal(applied, 'high');
+  assert.ok(!doc.body.classList.contains('low-fx'), 'High tier must clear body.low-fx');
+});
+
+test('Software GPUs (SwiftShader) boot with antialias off into Fast tier', () => {
+  const { dbg } = loadGameHarness({
+    fullWorld: true,
+    gpuRenderer: 'Google SwiftShader (llvmpipe)',
+  });
+  assert.equal(dbg.renderer.opts.antialias, false, 'software GPU boot must disable MSAA');
+  assert.equal(dbg.getQuality(), 'fast', 'software GPU boot must start in Fast tier');
+});
+
+test('Normal GPUs keep MSAA and boot in High tier', () => {
+  const { dbg } = loadGameHarness({ fullWorld: true });
+  assert.equal(dbg.renderer.opts.antialias, true, 'default boot must keep antialias on');
+  assert.equal(dbg.getQuality(), 'high');
+});
+
+test('FPS watchdog steps quality High -> Balanced -> Fast after 3s under 16 FPS', () => {
+  const { dbg } = loadGameHarness({ hash: '#test' });
+  const wd = dbg.perfWatchdog;
+  assert.ok(wd && typeof wd.tick === 'function', 'perfWatchdog must be exposed on debug handle');
+  wd.enabled = true;
+  wd.reset();
+  dbg.setQuality('high');
+
+  // Three consecutive 1s windows at ~1 FPS trip the step-down
+  assert.equal(wd.tick(1.0), null, 'first low window only arms the streak');
+  assert.equal(wd.tick(1.0), null, 'second low window still under the 3s threshold');
+  assert.equal(wd.tick(1.0), 'balanced', 'third low second must step down to Balanced');
+
+  // 10s cooldown blocks immediate further step-downs
+  for (let i = 0; i < 9; i++) {
+    assert.equal(wd.tick(1.0), null, 'cooldown must suppress step-downs');
+  }
+  assert.equal(wd.tick(1.0), 'fast', 'after cooldown, sustained low FPS must reach Fast');
+
+  // Already at Fast: no further step-down
+  assert.equal(wd.tick(1.0), null, 'Fast is the floor; watchdog must not step past it');
+
+  // Healthy framerate resets the streak and never steps down
+  wd.reset();
+  dbg.setQuality('high');
+  for (let i = 0; i < 5; i++) {
+    assert.equal(wd.tick(1 / 60), null, '60 FPS windows must never trip the watchdog');
+  }
+  assert.equal(dbg.getQuality(), 'high');
+
+  // Watchdog can be disabled entirely
+  wd.enabled = false;
+  assert.equal(wd.tick(1.0), null, 'disabled watchdog must be inert');
+  wd.enabled = true;
+  assert.equal(dbg.stepQualityDown(), 'balanced', 'stepQualityDown must force one tier down');
+});

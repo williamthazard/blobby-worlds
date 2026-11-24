@@ -77,6 +77,13 @@ const Env = (() => {
       rays: 6,
       motes: 56,
     },
+    fast: {
+      stars: 220,
+      cloudBanks: 7,
+      clouds: 40,
+      rays: 3,
+      motes: 24,
+    },
   };
 
   const MAX_STARS = 900;
@@ -1454,8 +1461,8 @@ const Env = (() => {
   }
 
   function setQuality(mode) {
-    _qualityMode = mode === 'balanced' ? 'balanced' : 'high';
-    const counts = QUALITY_COUNTS[_qualityMode];
+    _qualityMode = mode === 'fast' || mode === 'balanced' ? mode : 'high';
+    const counts = QUALITY_COUNTS[_qualityMode] || QUALITY_COUNTS.high;
     if (!_rig) return _qualityMode;
 
     _rig.quality = _qualityMode;
