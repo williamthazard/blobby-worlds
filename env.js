@@ -239,7 +239,7 @@ const Env = (() => {
     _mEuler = T.Euler ? new T.Euler() : null;
     _mColor = new T.Color(0xffffff);
     _rayQuat = new T.Quaternion();
-    _rayDir = new T.Vector3(0, -1, 0);
+    _rayDir = new T.Vector3(0, 1, 0);
     _rayUp = new T.Vector3(0, 1, 0);
     _rayBaseColor = new T.Color(0x8cf4e4);
     _rayNightColor = new T.Color(0x4b74b8);
@@ -630,7 +630,12 @@ const Env = (() => {
     const count = isTyped ? Math.floor(matrices.length / 16) : (Array.isArray(matrices) ? matrices.length : 0);
     if (count <= 0) return;
 
-    const parent = (entry.chunk && entry.chunk.group) || entry.parent || _scene;
+    const parent = (entry.chunk && entry.chunk.group) ||
+      entry.parent ||
+      (entry.fallbackMesh && entry.fallbackMesh.parent) ||
+      _scene;
+    if (!parent || typeof parent.add !== 'function') return;
+
     const created = [];
     for (let p = 0; p < template.parts.length; p++) {
       const part = template.parts[p];
@@ -646,12 +651,12 @@ const Env = (() => {
         }
       }
       if (mesh.instanceMatrix) mesh.instanceMatrix.needsUpdate = true;
-      if (parent && typeof parent.add === 'function') parent.add(mesh);
+      parent.add(mesh);
       if (entry.chunk && Array.isArray(entry.chunk.meshes)) entry.chunk.meshes.push(mesh);
       created.push(mesh);
     }
 
-    if (entry.fallbackMesh) {
+    if (entry.fallbackMesh && created.length > 0) {
       entry.fallbackMesh.visible = false;
       if (entry.fallbackMesh.parent && typeof entry.fallbackMesh.parent.remove === 'function') {
         entry.fallbackMesh.parent.remove(entry.fallbackMesh);
@@ -802,7 +807,9 @@ const Env = (() => {
       propCache.set(key, template);
 
       for (let i = 0; i < waiters.length; i++) {
-        if (typeof waiters[i].onReady === 'function') waiters[i].onReady(template);
+        if (typeof waiters[i].onReady === 'function') {
+          try { waiters[i].onReady(template); } catch (_e) {}
+        }
       }
       flushPendingSwaps(key, template);
     };
@@ -811,7 +818,9 @@ const Env = (() => {
       const waiters = pendingLoads.get(key) || [];
       pendingLoads.delete(key);
       for (let i = 0; i < waiters.length; i++) {
-        if (typeof waiters[i].onError === 'function') waiters[i].onError(err);
+        if (typeof waiters[i].onError === 'function') {
+          try { waiters[i].onError(err); } catch (_e) {}
+        }
       }
     };
 
@@ -1222,6 +1231,9 @@ const Env = (() => {
     const mat = ShadersRef && typeof ShadersRef.createStarfieldMaterial === 'function'
       ? ShadersRef.createStarfieldMaterial()
       : new THREERef.PointsMaterial({ color: 0xfff6d9, size: 2.5, transparent: true, fog: false });
+    if (mat && mat.uniforms && mat.uniforms.uStarAlpha) {
+      mat.uniforms.uStarAlpha.value = _celState.starAlpha;
+    }
 
     const pts = new THREERef.Points(geo, mat);
     pts.frustumCulled = false;
@@ -1336,6 +1348,7 @@ const Env = (() => {
       shaft.position.set(ax, -len * 0.48, az);
       shaft.scale.set(radiusScale, len, radiusScale);
       shaft.frustumCulled = false;
+      shaft.renderOrder = 3;
       shaft.userData = {
         active: i < activeRays,
         bx: ax,
@@ -1550,11 +1563,11 @@ const Env = (() => {
             sharedMat.color.lerpColors(_rayBaseColor, _rayNightColor, _celState.nightFactor);
           }
         }
-        // Tilt shaft along refracted sun rays
+        // Point local +Y upward toward the refracted sun vector so narrow 0.32 top stays at waterY
         _rayDir.set(
-          -_celState.sunDir.x * 0.32,
-          -1.0,
-          -_celState.sunDir.z * 0.32
+          _celState.sunDir.x * 0.32,
+          1.0,
+          _celState.sunDir.z * 0.32
         ).normalize();
         if (typeof _rayQuat.setFromUnitVectors === 'function') {
           _rayQuat.setFromUnitVectors(_rayUp, _rayDir);

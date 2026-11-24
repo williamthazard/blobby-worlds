@@ -794,6 +794,34 @@ test('preloadProp coalesces concurrent loads, parses file: .glb.js bundles, rest
     console.error = origConsoleError;
   }
   assert.equal(consoleErrors, 0, 'Fallbacks must log zero console.error messages');
+
+  // 5) Throwing onReady listener must not block subsequent waiters or flushPendingSwaps
+  Env._resetCache();
+  let asyncLoadCb = null;
+  class AsyncThrowLoader {
+    load(_url, onLoad) { asyncLoadCb = onLoad; }
+  }
+  let goodListenerFired = false;
+  let readyHookFired = false;
+  const throwHolder = new THREE.Group('ThrowHolder');
+  Env.onPropReady('ruin_column', () => { readyHookFired = true; });
+  Env.registerNodeSwap('ruin_column', throwHolder);
+  Env.preloadProp('ruin_column', () => { throw new Error('waiter 1 boom'); }, null, {
+    THREE,
+    Textures,
+    GLTFLoader: AsyncThrowLoader,
+    protocol: 'https:',
+  });
+  Env.preloadProp('ruin_column', () => { goodListenerFired = true; }, null, {
+    THREE,
+    Textures,
+    GLTFLoader: AsyncThrowLoader,
+    protocol: 'https:',
+  });
+  asyncLoadCb({ scene: makeMockPropScene(THREE, ['Stone_Column']) });
+  assert.equal(goodListenerFired, true, 'Subsequent onReady waiter must fire after earlier waiter throws');
+  assert.equal(readyHookFired, true, 'onPropReady must still fire after waiter throws');
+  assert.equal(throwHolder.userData.glbSwapped, 'ruin_column', 'Pending node swaps must flush after waiter throws');
 });
 
 test('registerInstancedSwap, unregisterChunk, and registerNodeSwap hot-swap both deferred and cached props', () => {
@@ -897,6 +925,25 @@ test('registerInstancedSwap, unregisterChunk, and registerNodeSwap hot-swap both
   assert.equal(slotFallback.visible, false);
   assert.equal(slotChunk.meshes.length, 2, 'bush_berry slot should mount 2 sub-part InstancedMeshes');
   assert.ok(shaderCalls.patchFoliageReactive.length >= 1, 'bush_berry must receive patchFoliageReactive');
+
+  // registerChunkSlot without chunk.group or opts.parent when _scene === null must resolve fallbackMesh.parent
+  const worldParent = new THREE.Group('WorldScene');
+  const worldChunk = { meshes: [] };
+  const worldFallback = new THREE.Mesh(fallbackGeo, fallbackMat);
+  worldParent.add(worldFallback);
+  Env.registerChunkSlot(worldChunk, 'oak_tree', slotMatrices, worldFallback, { THREE });
+  assert.equal(worldChunk.meshes.length, 2, 'Should mount 2 GLB sub-parts into fallbackMesh.parent');
+  assert.equal(worldParent.children.includes(worldChunk.meshes[0]), true);
+  assert.equal(worldParent.children.includes(worldChunk.meshes[1]), true);
+  assert.equal(worldFallback.visible, false);
+  assert.equal(worldFallback.parent, null);
+
+  // registerChunkSlot with NO parent anywhere must keep fallbackMesh intact
+  const orphanChunk = { meshes: [] };
+  const orphanFallback = new THREE.Mesh(fallbackGeo, fallbackMat);
+  Env.registerChunkSlot(orphanChunk, 'oak_tree', slotMatrices, orphanFallback, { THREE });
+  assert.equal(orphanFallback.visible, true, 'Fallback must remain visible if no parent exists to attach GLB');
+  assert.equal(orphanChunk.meshes.length, 0);
 });
 
 test('computeCelestialState covers 0/8 night, 4/8 golden dawn, 8/8 azure day (zero stars), and 720s post-8/8 live cycle', () => {
@@ -978,11 +1025,17 @@ test('initScene, setQuality, biome motes, underwater rays, and strict zero-GC sc
   assert.ok(rig.stars && rig.clouds && rig.sunbeams && rig.motes);
   assert.equal(scene.addCalls, 4, 'initScene must add the 4 pooled FX rigs once');
 
-  // High mode defaults
+  // High mode defaults & initial renderOrder / uStarAlpha sync
   assert.equal(rig.stars.geometry.drawRange.count, 900);
   assert.equal(rig.clouds.count, 168);
   assert.equal(rig.sunbeams.children.length, 16);
+  assert.equal(rig.sunbeams.children[0].renderOrder, 3, 'Each sunbeam shaft must carry renderOrder=3');
   assert.equal(rig.motes.count, 120);
+  assert.equal(
+    rig.stars.material.uniforms.uStarAlpha.value,
+    Env.getCelestialState().starAlpha,
+    'Initial uStarAlpha must match current celestial starAlpha'
+  );
 
   // Switch to Balanced -> half/scaled counts without reallocations
   Env.setQuality('balanced');
@@ -1005,9 +1058,12 @@ test('initScene, setQuality, biome motes, underwater rays, and strict zero-GC sc
   assert.equal(rig.stars.material.uniforms.uStarAlpha.value, 0);
   assert.equal(rig.sunbeams.visible, false, 'Sunbeams must hide above water');
 
-  // Underwater daytime -> sunbeams shine and motes adapt to underwater plankton
+  // Underwater daytime -> sunbeams shine upright (narrow top at waterY, wide base below) and motes adapt to plankton
   Env.update(0.016, 2.0, { px: -14, py: -3, pz: 86, camX: -14, camY: -2, camZ: 92, waterY: 0 });
   assert.equal(rig.sunbeams.visible, true, 'Sunbeams must shine underwater during day');
+  const qRay = rig.sunbeams.children[0].quaternion;
+  const rayUpY = 1 - 2 * (qRay.x * qRay.x + qRay.z * qRay.z);
+  assert.ok(rayUpY > 0.8, `Sunbeam local +Y must stay upright (y > 0.8), got ${rayUpY}`);
   const planktonR = rig.motes.instanceColor.array[0];
   const planktonG = rig.motes.instanceColor.array[1];
   const planktonB = rig.motes.instanceColor.array[2];
@@ -1018,6 +1074,7 @@ test('initScene, setQuality, biome motes, underwater rays, and strict zero-GC sc
   Env.update(0.016, 3.0, { px: -14, py: -3, pz: 86, camX: -14, camY: -2, camZ: 92, waterY: 0 });
   assert.equal(rig.stars.visible, true, 'Nighttime starfield must be visible');
   assert.ok(rig.stars.material.uniforms.uStarAlpha.value > 0.5);
+  assert.equal(rig.sunbeams.visible, false, 'Sunbeams must be hidden at lit=0 deep night underwater');
 
   // Biome mote palettes: Frostpeak snow vs Canyon Oasis sand vs Whispering Forest fireflies
   Env.setSkyProgress(8);
@@ -1080,4 +1137,10 @@ test('initScene, setQuality, biome motes, underwater rays, and strict zero-GC sc
       assert.ok(!forbidden.test(fnBody), `Hot function ${fnName} matched forbidden allocation ${forbidden}`);
     }
   }
+
+  // initScene initializes uStarAlpha directly from current celestial state
+  Env._resetCache();
+  Env.setSkyProgress(8);
+  const rigDay = Env.initScene(new THREE.Scene(), { THREE, Shaders: makeMockEnv().Shaders });
+  assert.equal(rigDay.stars.material.uniforms.uStarAlpha.value, 0, 'uStarAlpha must initialize to 0 when day is active');
 });
