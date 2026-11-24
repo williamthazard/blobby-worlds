@@ -7,6 +7,7 @@ function makeMockThree() {
   class Vector2 {
     constructor(x = 0, y = 0) { this.x = x; this.y = y; }
     set(x, y) { this.x = x; this.y = y; return this; }
+    setScalar(v) { this.x = v; this.y = v; return this; }
   }
   class Vector3 {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
@@ -17,9 +18,28 @@ function makeMockThree() {
     clone() { return new Vector3(this.x, this.y, this.z); }
     addScaledVector(v, s) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
     subVectors(a, b) { this.x = a.x - b.x; this.y = a.y - b.y; this.z = a.z - b.z; return this; }
+    crossVectors(a, b) {
+      this.x = a.y * b.z - a.z * b.y;
+      this.y = a.z * b.x - a.x * b.z;
+      this.z = a.x * b.y - a.y * b.x;
+      return this;
+    }
+    lengthSq() { return this.x * this.x + this.y * this.y + this.z * this.z; }
     normalize() {
       const l = Math.hypot(this.x, this.y, this.z) || 1;
       this.x /= l; this.y /= l; this.z /= l;
+      return this;
+    }
+    applyAxisAngle(axis, angle) {
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const t = 1 - c;
+      const x = this.x, y = this.y, z = this.z;
+      const ax = axis.x, ay = axis.y, az = axis.z;
+      const dot = ax * x + ay * y + az * z;
+      this.x = x * c + (ay * z - az * y) * s + ax * dot * t;
+      this.y = y * c + (az * x - ax * z) * s + ay * dot * t;
+      this.z = z * c + (ax * y - ay * x) * s + az * dot * t;
       return this;
     }
     lerp(v, a) {
@@ -54,6 +74,7 @@ function makeMockThree() {
     clone() { return new Quaternion(this.x, this.y, this.z, this.w); }
     identity() { this.x = 0; this.y = 0; this.z = 0; this.w = 1; return this; }
     setFromEuler() { return this; }
+    setFromUnitVectors() { return this; }
     setFromAxisAngle(axis, angle) {
       const s = Math.sin(angle * 0.5);
       this.x = axis.x * s;
@@ -80,20 +101,52 @@ function makeMockThree() {
     }
   }
   class Matrix4 {
-    constructor() { this.elements = new Float32Array(16); }
-    compose() { return this; }
-    copy(m) { this.elements.set(m.elements); return this; }
-  }
-  class Color {
-    constructor(c = 0xffffff) { this.r = 1; this.g = 1; this.b = 1; this.setHex(c); }
-    setHex(hex) {
-      if (typeof hex === 'number') {
-        this.r = ((hex >> 16) & 255) / 255;
-        this.g = ((hex >> 8) & 255) / 255;
-        this.b = (hex & 255) / 255;
+    constructor() {
+      this.elements = new Float32Array(16);
+      this.elements[0] = this.elements[5] = this.elements[10] = this.elements[15] = 1;
+    }
+    compose(pos, quat, scale) {
+      if (pos) {
+        this.elements[12] = pos.x;
+        this.elements[13] = pos.y;
+        this.elements[14] = pos.z;
+      }
+      if (scale) {
+        this.elements[0] = scale.x;
+        this.elements[5] = scale.y;
+        this.elements[10] = scale.z;
       }
       return this;
     }
+    copy(m) { this.elements.set(m.elements); return this; }
+    multiplyMatrices() { return this; }
+    makeTranslation(x, y, z) {
+      this.elements[12] = x; this.elements[13] = y; this.elements[14] = z;
+      return this;
+    }
+    makeRotationX() { return this; }
+    makeRotationY() { return this; }
+    makeRotationZ() { return this; }
+    makeScale(x, y, z) {
+      this.elements[0] = x; this.elements[5] = y; this.elements[10] = z;
+      return this;
+    }
+  }
+  class Color {
+    constructor(c = 0xffffff) { this.r = 1; this.g = 1; this.b = 1; this.set(c); }
+    set(v) {
+      if (typeof v === 'number') {
+        this.r = ((v >> 16) & 255) / 255;
+        this.g = ((v >> 8) & 255) / 255;
+        this.b = (v & 255) / 255;
+      } else if (v && typeof v === 'object' && 'r' in v) {
+        this.r = v.r;
+        this.g = v.g;
+        this.b = v.b;
+      }
+      return this;
+    }
+    setHex(hex) { return this.set(hex); }
     setRGB(r, g, b) { this.r = r; this.g = g; this.b = b; return this; }
     copy(c) { this.r = c.r; this.g = c.g; this.b = c.b; return this; }
     clone() { return new Color().copy(this); }
@@ -110,7 +163,216 @@ function makeMockThree() {
       this.b = a.b + (b.b - a.b) * t;
       return this;
     }
+    offsetHSL(_h, _s, l) {
+      this.r = Math.max(0, Math.min(1, this.r + l));
+      this.g = Math.max(0, Math.min(1, this.g + l));
+      this.b = Math.max(0, Math.min(1, this.b + l));
+      return this;
+    }
     convertSRGBToLinear() { return this; }
+  }
+  class BufferAttribute {
+    constructor(array, itemSize) {
+      this.array = array;
+      this.itemSize = itemSize;
+      this.count = array.length / itemSize;
+      this.needsUpdate = false;
+    }
+    getX(i) { return this.array[i * this.itemSize]; }
+    getY(i) { return this.array[i * this.itemSize + 1]; }
+    getZ(i) { return this.array[i * this.itemSize + 2]; }
+    setXYZ(i, x, y, z) {
+      const idx = i * this.itemSize;
+      this.array[idx] = x;
+      this.array[idx + 1] = y;
+      this.array[idx + 2] = z;
+    }
+    setXY(i, x, y) {
+      const idx = i * this.itemSize;
+      this.array[idx] = x;
+      this.array[idx + 1] = y;
+    }
+    setY(i, y) { this.array[i * this.itemSize + 1] = y; }
+  }
+  class BufferGeometry {
+    constructor(kind = 'buffer') {
+      this.kind = kind;
+      this.attributes = {};
+      this.index = null;
+      this.disposed = false;
+    }
+    setAttribute(name, attr) { this.attributes[name] = attr; return this; }
+    setIndex(idx) {
+      this.index = Array.isArray(idx) ? new BufferAttribute(new Uint16Array(idx), 1) : idx;
+      return this;
+    }
+    setDrawRange() { return this; }
+    rotateX(angle) {
+      const pos = this.attributes.position;
+      if (!pos) return this;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      for (let i = 0; i < pos.count; i++) {
+        const y = pos.getY(i);
+        const z = pos.getZ(i);
+        pos.array[i * 3 + 1] = y * c - z * s;
+        pos.array[i * 3 + 2] = y * s + z * c;
+      }
+      return this;
+    }
+    rotateY() { return this; }
+    rotateZ() { return this; }
+    applyMatrix4() { return this; }
+    translate(tx = 0, ty = 0, tz = 0) {
+      const pos = this.attributes.position;
+      if (!pos) return this;
+      for (let i = 0; i < pos.count; i++) {
+        pos.array[i * 3] += tx;
+        pos.array[i * 3 + 1] += ty;
+        pos.array[i * 3 + 2] += tz;
+      }
+      return this;
+    }
+    scale(sx = 1, sy = 1, sz = 1) {
+      const pos = this.attributes.position;
+      if (!pos) return this;
+      for (let i = 0; i < pos.count; i++) {
+        pos.array[i * 3] *= sx;
+        pos.array[i * 3 + 1] *= sy;
+        pos.array[i * 3 + 2] *= sz;
+      }
+      return this;
+    }
+    computeVertexNormals() {
+      const pos = this.attributes.position;
+      if (pos && !this.attributes.normal) {
+        const n = new Float32Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) n[i * 3 + 1] = 1;
+        this.attributes.normal = new BufferAttribute(n, 3);
+      }
+      return this;
+    }
+    toNonIndexed() { return this; }
+    clone() {
+      const g = new BufferGeometry(this.kind);
+      for (const k in this.attributes) {
+        const a = this.attributes[k];
+        g.attributes[k] = new BufferAttribute(new a.array.constructor(a.array), a.itemSize);
+      }
+      if (this.index) {
+        g.index = new BufferAttribute(new this.index.array.constructor(this.index.array), this.index.itemSize);
+      }
+      return g;
+    }
+    dispose() { this.disposed = true; }
+  }
+  class PlaneGeometry extends BufferGeometry {
+    constructor(width = 1, height = 1, wSeg = 1, hSeg = 1) {
+      super('plane');
+      const cols = wSeg + 1;
+      const rows = hSeg + 1;
+      const count = cols * rows;
+      const pos = new Float32Array(count * 3);
+      const norm = new Float32Array(count * 3);
+      const uv = new Float32Array(count * 2);
+      const indices = [];
+      let p = 0;
+      let u = 0;
+      for (let iy = 0; iy < rows; iy++) {
+        const v = iy / hSeg;
+        const y = (0.5 - v) * height;
+        for (let ix = 0; ix < cols; ix++) {
+          const s = ix / wSeg;
+          const x = (s - 0.5) * width;
+          pos[p] = x; pos[p + 1] = y; pos[p + 2] = 0;
+          norm[p + 2] = 1;
+          uv[u] = s; uv[u + 1] = 1 - v;
+          p += 3; u += 2;
+        }
+      }
+      for (let iy = 0; iy < hSeg; iy++) {
+        for (let ix = 0; ix < wSeg; ix++) {
+          const a = ix + cols * iy;
+          const b = ix + cols * (iy + 1);
+          const c = ix + 1 + cols * (iy + 1);
+          const d = ix + 1 + cols * iy;
+          indices.push(a, b, d, b, c, d);
+        }
+      }
+      this.setAttribute('position', new BufferAttribute(pos, 3));
+      this.setAttribute('normal', new BufferAttribute(norm, 3));
+      this.setAttribute('uv', new BufferAttribute(uv, 2));
+      this.setIndex(indices);
+    }
+  }
+  class RadialGeometry extends BufferGeometry {
+    constructor(kind, seg = 8, rings = 4, height = 1) {
+      super(kind);
+      const cols = seg + 1;
+      const rows = rings + 1;
+      const count = cols * rows;
+      const pos = new Float32Array(count * 3);
+      const norm = new Float32Array(count * 3);
+      const uv = new Float32Array(count * 2);
+      const indices = [];
+      let p = 0;
+      let u = 0;
+      for (let iy = 0; iy < rows; iy++) {
+        const v = iy / rings;
+        const y = (v - 0.5) * height;
+        for (let ix = 0; ix < cols; ix++) {
+          const a = (ix / seg) * Math.PI * 2;
+          pos[p] = Math.cos(a) * 0.5;
+          pos[p + 1] = y;
+          pos[p + 2] = Math.sin(a) * 0.5;
+          norm[p] = Math.cos(a);
+          norm[p + 2] = Math.sin(a);
+          uv[u] = ix / seg;
+          uv[u + 1] = v;
+          p += 3; u += 2;
+        }
+      }
+      for (let iy = 0; iy < rings; iy++) {
+        for (let ix = 0; ix < seg; ix++) {
+          const a = ix + cols * iy;
+          const b = ix + cols * (iy + 1);
+          const c = ix + 1 + cols * (iy + 1);
+          const d = ix + 1 + cols * iy;
+          indices.push(a, b, d, b, c, d);
+        }
+      }
+      this.setAttribute('position', new BufferAttribute(pos, 3));
+      this.setAttribute('normal', new BufferAttribute(norm, 3));
+      this.setAttribute('uv', new BufferAttribute(uv, 2));
+      this.setIndex(indices);
+    }
+  }
+  class CylinderGeometry extends RadialGeometry {
+    constructor(_rt = 1, _rb = 1, h = 1, radSeg = 8, hSeg = 1) { super('cylinder', radSeg, hSeg, h); }
+  }
+  class ConeGeometry extends RadialGeometry {
+    constructor(_r = 1, h = 1, radSeg = 8, hSeg = 1) { super('cone', radSeg, hSeg, h); }
+  }
+  class SphereGeometry extends RadialGeometry {
+    constructor(r = 1, wSeg = 8, hSeg = 6) { super('sphere', wSeg, hSeg, r * 2); }
+  }
+  class IcosahedronGeometry extends RadialGeometry {
+    constructor(r = 1, detail = 1) { super('icosahedron', 6 + detail * 4, 3 + detail * 2, r * 2); }
+  }
+  class BoxGeometry extends RadialGeometry {
+    constructor() { super('box', 4, 2, 1); }
+  }
+  class TorusGeometry extends RadialGeometry {
+    constructor() { super('torus', 6, 3, 1); }
+  }
+  class OctahedronGeometry extends RadialGeometry {
+    constructor() { super('octahedron', 4, 2, 1); }
+  }
+  class DodecahedronGeometry extends RadialGeometry {
+    constructor() { super('dodecahedron', 5, 3, 1); }
+  }
+  class RingGeometry extends RadialGeometry {
+    constructor() { super('ring', 6, 1, 0); }
   }
   class Object3D {
     constructor() {
@@ -148,7 +410,7 @@ function makeMockThree() {
         this.children[i].traverse(fn);
       }
     }
-    updateMatrix() {}
+    updateMatrix() { this.matrix.compose(this.position, this.quaternion, this.scale); }
     updateMatrixWorld() {}
     lookAt() {}
     rotateX() {}
@@ -158,21 +420,14 @@ function makeMockThree() {
     constructor() {
       super();
       this.addCalls = 0;
+      this.background = null;
+      this.fog = null;
+      this.environment = null;
     }
     add(...items) {
       this.addCalls += items.length;
       return super.add(...items);
     }
-  }
-  class Geo {
-    constructor(kind = 'geo') { this.kind = kind; }
-    translate() { return this; }
-    rotateX() { return this; }
-    rotateY() { return this; }
-    rotateZ() { return this; }
-    scale() { return this; }
-    computeVertexNormals() { return this; }
-    dispose() {}
   }
   class Mat {
     constructor(opts = {}) {
@@ -189,10 +444,12 @@ function makeMockThree() {
   class InstancedMesh extends Object3D {
     constructor(geometry, material, count) {
       super();
+      this.type = 'InstancedMesh';
+      this.isInstancedMesh = true;
       this.geometry = geometry;
       this.material = material;
       this.count = count;
-      this.instanceMatrix = { array: new Float32Array(count * 16), needsUpdate: false };
+      this.instanceMatrix = new BufferAttribute(new Float32Array(count * 16), 16);
       this.instanceColor = null;
     }
     setMatrixAt(i, m) {
@@ -200,7 +457,7 @@ function makeMockThree() {
     }
     setColorAt(i, c) {
       if (!this.instanceColor) {
-        this.instanceColor = { array: new Float32Array(this.count * 3), needsUpdate: false };
+        this.instanceColor = new BufferAttribute(new Float32Array(this.count * 3), 3);
       }
       this.instanceColor.array[i * 3] = c.r;
       this.instanceColor.array[i * 3 + 1] = c.g;
@@ -208,6 +465,12 @@ function makeMockThree() {
     }
   }
   class Mesh extends Object3D {
+    constructor(g, m) { super(); this.type = 'Mesh'; this.geometry = g; this.material = m; }
+  }
+  class Points extends Object3D {
+    constructor(g, m) { super(); this.geometry = g; this.material = m; }
+  }
+  class LineSegments extends Object3D {
     constructor(g, m) { super(); this.geometry = g; this.material = m; }
   }
   class Sprite extends Object3D {
@@ -216,9 +479,74 @@ function makeMockThree() {
   class PointLight extends Object3D {
     constructor(c, i, d) { super(); this.color = c; this.intensity = i; this.distance = d; }
   }
-  class PerspectiveCamera extends Object3D {
-    constructor() { super(); }
+  class HemisphereLight extends Object3D {
+    constructor(sky, gnd, i = 1) {
+      super();
+      this.color = new Color(sky);
+      this.groundColor = new Color(gnd);
+      this.intensity = i;
+    }
+  }
+  class OrthographicCamera extends Object3D {
+    constructor() {
+      super();
+      this.left = -1; this.right = 1; this.top = 1; this.bottom = -1; this.near = 0.5; this.far = 500;
+    }
     updateProjectionMatrix() {}
+  }
+  class DirectionalLight extends Object3D {
+    constructor(c, i = 1) {
+      super();
+      this.color = new Color(c);
+      this.intensity = i;
+      this.target = new Object3D();
+      this.shadow = {
+        mapSize: new Vector2(512, 512),
+        camera: new OrthographicCamera(),
+        bias: 0,
+        normalBias: 0,
+        map: { disposed: false, dispose() { this.disposed = true; } },
+      };
+    }
+  }
+  class PerspectiveCamera extends Object3D {
+    constructor(fov = 60, aspect = 1, near = 0.1, far = 600) {
+      super();
+      this.fov = fov; this.aspect = aspect; this.near = near; this.far = far;
+    }
+    updateProjectionMatrix() {}
+  }
+  class CanvasTexture {
+    constructor(canvas) { this.canvas = canvas; this.needsUpdate = false; }
+  }
+  class DataTexture {
+    constructor(data, w, h) { this.data = data; this.width = w; this.height = h; this.needsUpdate = false; }
+  }
+  class Fog {
+    constructor(color, near, far) { this.color = new Color(color); this.near = near; this.far = far; }
+  }
+  class WebGLRenderer {
+    constructor(opts = {}) {
+      this.opts = opts;
+      this.domElement = {
+        tagName: 'CANVAS',
+        listeners: {},
+        addEventListener(ev, fn) { (this.listeners[ev] ||= []).push(fn); },
+        removeEventListener() {},
+      };
+      this.shadowMap = { enabled: false, type: null };
+      this.capabilities = { maxTextureSize: 4096, getMaxAnisotropy: () => 4 };
+      this._pixelRatio = 1;
+    }
+    setSize() {}
+    setPixelRatio(r) { this._pixelRatio = r; }
+    getPixelRatio() { return this._pixelRatio; }
+    render() {}
+  }
+  class PMREMGenerator {
+    constructor() {}
+    fromScene() { return { texture: {}, dispose() {} }; }
+    dispose() {}
   }
 
   return {
@@ -228,16 +556,35 @@ function makeMockThree() {
     Quaternion,
     Matrix4,
     Color,
+    BufferAttribute,
+    BufferGeometry,
     Object3D,
     Group: Object3D,
     Scene,
     Mesh,
     InstancedMesh,
+    Points,
+    LineSegments,
     Sprite,
     PointLight,
+    HemisphereLight,
+    DirectionalLight,
     PerspectiveCamera,
+    OrthographicCamera,
+    CanvasTexture,
+    DataTexture,
+    Fog,
+    WebGLRenderer,
+    PMREMGenerator,
     DoubleSide: 2,
+    BackSide: 1,
     AdditiveBlending: 2,
+    sRGBEncoding: 3001,
+    LinearEncoding: 3000,
+    ClampToEdgeWrapping: 1001,
+    RepeatWrapping: 1000,
+    ACESFilmicToneMapping: 4,
+    PCFSoftShadowMap: 2,
     MathUtils: {
       clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
       smoothstep: (x, a, b) => {
@@ -247,21 +594,25 @@ function makeMockThree() {
     },
     MeshStandardMaterial: Mat,
     MeshBasicMaterial: Mat,
+    ShaderMaterial: Mat,
+    PointsMaterial: Mat,
+    LineBasicMaterial: Mat,
     SpriteMaterial: Mat,
-    SphereGeometry: Geo,
-    CylinderGeometry: Geo,
-    ConeGeometry: Geo,
-    BoxGeometry: Geo,
-    TorusGeometry: Geo,
-    OctahedronGeometry: Geo,
-    IcosahedronGeometry: Geo,
-    DodecahedronGeometry: Geo,
-    PlaneGeometry: Geo,
-    RingGeometry: Geo,
+    SphereGeometry,
+    CylinderGeometry,
+    ConeGeometry,
+    BoxGeometry,
+    TorusGeometry,
+    OctahedronGeometry,
+    IcosahedronGeometry,
+    DodecahedronGeometry,
+    PlaneGeometry,
+    RingGeometry,
+    CircleGeometry: RingGeometry,
   };
 }
 
-function makeMockDocument() {
+function makeMockDocument({ withCanvas = false } = {}) {
   const elements = new Map();
   const makeEl = (id) => {
     const classes = new Set();
@@ -301,9 +652,11 @@ function makeMockDocument() {
     makeEl(id);
   }
   const bodyClasses = new Set();
-  return {
+  const doc = {
     elements,
+    head: { appendChild() {} },
     body: {
+      appendChild() {},
       classList: {
         toggle: (c, force) => {
           if (force === undefined) {
@@ -318,29 +671,64 @@ function makeMockDocument() {
     },
     getElementById: (id) => elements.get(id) || makeEl(id),
   };
+  if (withCanvas) {
+    doc.createElement = (tag) => {
+      if (tag !== 'canvas') return { tagName: tag };
+      const canvas = {
+        width: 0,
+        height: 0,
+        _data: null,
+        getContext() {
+          return {
+            font: '',
+            fillStyle: '',
+            strokeStyle: '',
+            lineWidth: 1,
+            lineCap: 'butt',
+            textAlign: '',
+            textBaseline: '',
+            shadowColor: '',
+            shadowBlur: 0,
+            createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+            putImageData: (img) => { canvas._data = img.data; },
+            createRadialGradient: () => ({ addColorStop() {} }),
+            clearRect() {},
+            fillRect() {},
+            fillText() {},
+            beginPath() {},
+            closePath() {},
+            moveTo() {},
+            lineTo() {},
+            quadraticCurveTo() {},
+            arc() {},
+            ellipse() {},
+            stroke() {},
+            fill() {},
+            save() {},
+            restore() {},
+            translate() {},
+            rotate() {},
+            scale() {},
+          };
+        },
+      };
+      return canvas;
+    };
+  }
+  return doc;
 }
 
-function loadGameHarness({ hash = '' } = {}) {
+function loadGameHarness({ hash = '', fullWorld = false } = {}) {
   const THREE = makeMockThree();
-  const doc = makeMockDocument();
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera();
-  const renderer = {
-    domElement: {
-      listeners: {},
-      addEventListener(ev, fn) { (this.listeners[ev] ||= []).push(fn); },
-      removeEventListener() {},
-    },
-  };
-
-  let quality = 'high';
-  let skyProgress = 0;
-  let totemCol = null;
-  let colliders = [];
+  const doc = makeMockDocument({ withCanvas: fullWorld });
   const rafQueue = [];
 
   const audioCode = fs.readFileSync(new URL('../audio.js', import.meta.url), 'utf8');
+  const texturesCode = fullWorld ? fs.readFileSync(new URL('../textures.js', import.meta.url), 'utf8') : null;
+  const shadersCode = fullWorld ? fs.readFileSync(new URL('../shaders.js', import.meta.url), 'utf8') : null;
+  const envCode = fs.readFileSync(new URL('../env.js', import.meta.url), 'utf8');
   const regionsCode = fs.readFileSync(new URL('../regions.js', import.meta.url), 'utf8');
+  const worldCode = fullWorld ? fs.readFileSync(new URL('../world.js', import.meta.url), 'utf8') : null;
   const modelsCode = fs.readFileSync(new URL('../models.js', import.meta.url), 'utf8');
   const rigCode = fs.readFileSync(new URL('../rig.js', import.meta.url), 'utf8');
   const physicsCode = fs.readFileSync(new URL('../physics.js', import.meta.url), 'utf8');
@@ -370,6 +758,15 @@ function loadGameHarness({ hash = '' } = {}) {
       };
     },
   };
+
+  let quality = 'high';
+  let skyProgress = 0;
+  let totemCol = null;
+  let colliders = [];
+  const mockScene = fullWorld ? null : new THREE.Scene();
+  const mockCamera = fullWorld ? null : new THREE.PerspectiveCamera();
+  const mockRenderer = fullWorld ? null : new THREE.WebGLRenderer();
+
   const sandbox = {
     Math,
     Number,
@@ -377,7 +774,13 @@ function loadGameHarness({ hash = '' } = {}) {
     Object,
     Map,
     Set,
+    WeakSet,
+    WeakMap,
     Float32Array,
+    Uint16Array,
+    Uint8Array,
+    Uint8ClampedArray,
+    Int32Array,
     console,
     performance: { now: () => 1000 },
     setTimeout: () => 1,
@@ -387,88 +790,116 @@ function loadGameHarness({ hash = '' } = {}) {
     addEventListener: () => {},
     innerWidth: 1280,
     innerHeight: 720,
+    devicePixelRatio: 2,
     location: { hash },
     document: doc,
     window: windowObj,
     THREE,
-    Textures: { sets: {} },
-    Shaders: {
-      MAX_TRAMPLERS: 16,
-      tramplers: Array.from({ length: 16 }, () => ({ x: 0, y: -999, z: 0, w: 0 })),
-      setTrampler(i, x, y, z, r) {
-        if (i >= 0 && i < 16) {
-          this.tramplers[i].x = x;
-          this.tramplers[i].y = y;
-          this.tramplers[i].z = z;
-          this.tramplers[i].w = r;
-        }
-      },
-      clearTramplersFrom(start) {
-        for (let i = Math.max(0, start | 0); i < 16; i++) {
-          this.tramplers[i].x = 0;
-          this.tramplers[i].y = -999;
-          this.tramplers[i].z = 0;
-          this.tramplers[i].w = 0;
-        }
-      },
-      waterHeightAt: () => 0,
-      createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()),
-    },
-    WATER_Y: 0,
-    DAY_SKY_MAX_LIT: 8,
-    heightAt: () => 2.0,
-    terrainNormalAt: (_x, _z, out) => {
-      const o = out || {};
-      o.x = 0; o.y = 1; o.z = 0;
-      return o;
-    },
-    surfaceAt: () => 'grass',
-    setTotemCollider: (x, z, r) => { totemCol = { x, z, r }; },
-    clearTotemCollider: () => { totemCol = null; },
-    getNearbyColliders: (x, z, rad, out) => {
-      const arr = out || [];
-      arr.length = 0;
-      for (const c of colliders) {
-        if (Math.hypot(c.x - x, c.z - z) <= rad + c.r) arr.push(c);
-      }
-      if (totemCol && Math.hypot(totemCol.x - x, totemCol.z - z) <= rad + totemCol.r) {
-        arr.push(totemCol);
-      }
-      return arr;
-    },
-    landSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: 2.0 }),
-    waterSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: -4.0 }),
-    constellationNameFor: (n) => 'Constellation ' + n,
-    addConstellation: () => {},
-    setQuality: (m) => { quality = m === 'balanced' ? 'balanced' : 'high'; return quality; },
-    getQuality: () => quality,
-    setSkyProgress: (lit) => { skyProgress = lit; },
-    updateChunks: () => {},
-    updateEnvironment: () => {},
-    scene,
-    camera,
-    renderer,
   };
+
+  if (!fullWorld) {
+    Object.assign(sandbox, {
+      Textures: { sets: {} },
+      Shaders: {
+        MAX_TRAMPLERS: 16,
+        uniforms: {
+          uClothMotion: {
+            value: {
+              x: 0, y: 0, z: 0, w: 0.25,
+              set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; },
+            },
+          },
+        },
+        tramplers: Array.from({ length: 16 }, () => ({ x: 0, y: -999, z: 0, w: 0 })),
+        setTrampler(i, x, y, z, r) {
+          if (i >= 0 && i < 16) {
+            this.tramplers[i].x = x;
+            this.tramplers[i].y = y;
+            this.tramplers[i].z = z;
+            this.tramplers[i].w = r;
+          }
+        },
+        clearTramplersFrom(start) {
+          for (let i = Math.max(0, start | 0); i < 16; i++) {
+            this.tramplers[i].x = 0;
+            this.tramplers[i].y = -999;
+            this.tramplers[i].z = 0;
+            this.tramplers[i].w = 0;
+          }
+        },
+        setClothMotion(s, v, r, w) {
+          this.uniforms.uClothMotion.value.set(s || 0, v || 0, r || 0, w !== undefined ? w : 0.25);
+        },
+        setCelestial() {},
+        setWind() {},
+        waterHeightAt: () => 0,
+        createGlowSprite: () => new THREE.Sprite(new THREE.SpriteMaterial()),
+        createStarfieldMaterial: () => new THREE.ShaderMaterial({ uniforms: { uStarAlpha: { value: 1 } } }),
+        createCloudMaterial: () => new THREE.ShaderMaterial({ uniforms: {} }),
+      },
+      WATER_Y: 0,
+      DAY_SKY_MAX_LIT: 8,
+      heightAt: () => 2.0,
+      terrainNormalAt: (_x, _z, out) => {
+        const o = out || {};
+        o.x = 0; o.y = 1; o.z = 0;
+        return o;
+      },
+      surfaceAt: () => 'grass',
+      setTotemCollider: (x, z, r) => { totemCol = { x, z, r }; },
+      clearTotemCollider: () => { totemCol = null; },
+      getNearbyColliders: (x, z, rad, out) => {
+        const arr = out || [];
+        arr.length = 0;
+        for (const c of colliders) {
+          if (Math.hypot(c.x - x, c.z - z) <= rad + c.r) arr.push(c);
+        }
+        if (totemCol && Math.hypot(totemCol.x - x, totemCol.z - z) <= rad + totemCol.r) {
+          arr.push(totemCol);
+        }
+        return arr;
+      },
+      landSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: 2.0 }),
+      waterSpot: (px, pz, minD, maxD) => ({ x: px + (minD + maxD) * 0.5, z: pz, h: -4.0 }),
+      constellationNameFor: (n) => 'Constellation ' + n,
+      addConstellation: () => {},
+      setQuality: (m) => { quality = m === 'balanced' ? 'balanced' : 'high'; return quality; },
+      getQuality: () => quality,
+      setSkyProgress: (lit) => { skyProgress = lit; },
+      updateChunks: () => {},
+      updateEnvironment: () => {},
+      scene: mockScene,
+      camera: mockCamera,
+      renderer: mockRenderer,
+    });
+  }
+
   sandbox.globalThis = sandbox;
-  sandbox.renderer.render = () => {};
 
-  vm.runInNewContext(
-    audioCode + '\n' + regionsCode + '\n' +
-    'var worldLandmarks = Regions.buildWorldLandmarks(scene, heightAt, terrainNormalAt, Textures);\n' +
-    modelsCode + '\n' + rigCode + '\n' + physicsCode + '\n' + animalsCode + '\n' + enemiesCode + '\n' + gameCode,
-    sandbox
-  );
+  const chunksToRun = fullWorld
+    ? [
+      audioCode, texturesCode, shadersCode, envCode, regionsCode, worldCode,
+      modelsCode, rigCode, physicsCode, animalsCode, enemiesCode, gameCode,
+    ]
+    : [
+      audioCode, envCode, regionsCode,
+      'var worldLandmarks = Regions.buildWorldLandmarks(scene, heightAt, terrainNormalAt, Textures);',
+      modelsCode, rigCode, physicsCode, animalsCode, enemiesCode, gameCode,
+    ];
 
+  vm.runInNewContext(chunksToRun.join('\n'), sandbox);
+
+  const dbg = sandbox.window.__GAME_DEBUG__ || sandbox.__GAME_DEBUG__;
   return {
     sandbox,
-    dbg: sandbox.window.__GAME_DEBUG__ || sandbox.__GAME_DEBUG__,
+    dbg,
     doc,
-    scene,
+    scene: fullWorld ? dbg.scene : mockScene,
     THREE,
     rafQueue,
     getTotemCol: () => totemCol,
     setColliders: (c) => { colliders = c; },
-    getQualityState: () => quality,
+    getQualityState: () => (fullWorld ? dbg.getQuality() : quality),
     getSkyProgress: () => skyProgress,
   };
 }
@@ -507,6 +938,7 @@ test('index.html fixes typo, loads scripts in exact order, and includes upgraded
     'audio.js',
     'textures.js',
     'shaders.js',
+    'env.js',
     'regions.js',
     'world.js',
     'models.js',
@@ -522,7 +954,7 @@ test('game.js exposes window.__GAME_DEBUG__, wires Physics/Models, and toggles q
   const { dbg, doc, getQualityState } = loadGameHarness({ hash: '#test' });
   assert.ok(dbg, 'window.__GAME_DEBUG__ must be defined');
   for (const key of [
-    'P', 'Physics', 'Models', 'Shaders', 'Textures', 'scene', 'camera', 'renderer',
+    'P', 'Physics', 'Models', 'Shaders', 'Textures', 'Env', 'scene', 'camera', 'renderer',
     'glooms', 'cocoons', 'pickups', 'wild', 'followers', 'getTotem',
     'heightAt', 'terrainNormalAt', 'getNearbyColliders', 'setQuality',
     'setSkyProgress', 'lightTotem', 'shoot', 'spawnGloom', 'spawnCocoon',
@@ -1436,4 +1868,111 @@ test('Individualized companion stats, defense mitigation, tank aggro pull, aeria
   rafQueue[rafQueue.length - 1](1440);
   assert.equal(owl.hp, owlHpBefore, 'High-hovering aerial Owl must evade ground Behemoth shockwave');
   assert.ok(beetle.hp < beetleHpBefore, 'Grounded tank inside Behemoth shockwave must take the hit');
+});
+
+test('Sub-Project 4 Env wiring: moonlit night -> sunlit day -> live cycle, zero steady-state scene.addCalls, Gerstner buoyancy, and Balanced quality', () => {
+  const { dbg, rafQueue } = loadGameHarness({ hash: '#test', fullWorld: true });
+  let now = 1000;
+  const tick = (n = 1, step = 40) => {
+    for (let i = 0; i < n; i++) {
+      now += step;
+      rafQueue[rafQueue.length - 1](now);
+    }
+  };
+
+  // 1. Env is wired on window.__GAME_DEBUG__ and initialized by world.js
+  assert.ok(dbg.Env && typeof dbg.Env.update === 'function', 'window.__GAME_DEBUG__.Env must be wired');
+  assert.ok(dbg.Env.getSceneRig(), 'world.js must initialize Env scene rig on startup');
+  assert.ok(dbg.Shaders && dbg.Shaders.uniforms && dbg.Shaders.uniforms.uClothMotion, 'real Shaders uniforms must be active');
+
+  // Wrap Env.update without altering behavior to verify active regionId handoff from game.js -> world.js -> Env
+  const origEnvUpdate = dbg.Env.update;
+  const seenRegionIds = [];
+  dbg.Env.update = (dt, t, ctx) => {
+    if (ctx && ctx.regionId) seenRegionIds.push(ctx.regionId);
+    return origEnvUpdate(dt, t, ctx);
+  };
+
+  // 2. At lit = 0 (Starlit Moonlit Night): moon overhead, nightFactor > 0.8, warm Staff-Lantern bright
+  const cel0 = dbg.Env.getCelestialState();
+  assert.ok(cel0.nightFactor > 0.8, `At lit=0 nightFactor must exceed 0.8, got ${cel0.nightFactor}`);
+  assert.ok(cel0.moonDir.y > 0.4, `At lit=0 moonDir.y must exceed 0.4, got ${cel0.moonDir.y}`);
+  tick(2, 40);
+  assert.ok(dbg.Shaders.uniforms.uNightFactor.value > 0.8, 'Shaders uNightFactor must sync > 0.8 at night');
+  assert.ok(dbg.player.userData.staffLight.intensity > 1.0, `Staff-Lantern must glow warmly at night, got ${dbg.player.userData.staffLight.intensity}`);
+
+  // 3. Light all 8 totems (0/8 -> 8/8 Sunlit Day): zero daytime white square stars, gentle Staff-Lantern
+  for (let i = 0; i < 8; i++) {
+    dbg.lightTotem();
+    tick(10, 40);
+  }
+  const celDay = dbg.Env.getCelestialState();
+  assert.ok(celDay.nightFactor < 0.05, `At 8/8 sunlit day nightFactor must be < 0.05, got ${celDay.nightFactor}`);
+  assert.equal(celDay.starAlpha, 0, 'At 8/8 sunlit day starAlpha must be strictly 0 (zero daytime stars)');
+  assert.equal(dbg.Env.getSceneRig().stars.visible, false, 'Env starfield mesh must hide during daytime');
+  assert.ok(dbg.Shaders.uniforms.uNightFactor.value < 0.05, 'Shaders uNightFactor must sync < 0.05 in daytime');
+  assert.ok(dbg.player.userData.staffLight.intensity < 0.45, `Staff-Lantern must dim gently in daylight, got ${dbg.player.userData.staffLight.intensity}`);
+
+  // 4. Steady-state post-8/8 frames: zero scene.addCalls, live cycle advances, cloak wind tracks Env.getWindGust()
+  // Warm up ambient spawn pools first, then assert steady-state ticks add 0 objects to scene
+  while (dbg.glooms.filter(g => !g.underwater).length < 6) dbg.spawnGloom('classic');
+  tick(8, 40);
+  const addsBefore = dbg.scene.addCalls;
+  const cycleBefore = dbg.Env.getCelestialState().cycleTime;
+  tick(30, 40);
+  assert.equal(dbg.scene.addCalls - addsBefore, 0, 'Steady-state post-8/8 frames must produce ZERO scene.addCalls');
+  assert.ok(dbg.Env.getCelestialState().cycleTime > cycleBefore, 'Post-8/8 live day/night cycle must advance');
+
+  const expectedGust = dbg.Env.getWindGust();
+  assert.ok(expectedGust >= 0.25 && expectedGust <= 1.15, `Env.getWindGust() out of bounds: ${expectedGust}`);
+  assert.ok(
+    Math.abs(dbg.Shaders.uniforms.uClothMotion.value.w - expectedGust) < 1e-6,
+    `Starkeeper cloak wind (${dbg.Shaders.uniforms.uClothMotion.value.w}) must match Env.getWindGust() (${expectedGust})`
+  );
+  assert.ok(
+    Math.abs(dbg.Shaders.uniforms.uWindVec.value.z - expectedGust) < 1e-6,
+    `Shaders uWindVec.z (${dbg.Shaders.uniforms.uWindVec.value.z}) must match Env.getWindGust() (${expectedGust})`
+  );
+
+  // 5. Region transition passes active regionId into updateEnvironment -> Env.update
+  dbg.P.x = 62;
+  dbg.P.z = -78;
+  dbg.P.y = dbg.heightAt(62, -78) + 0.1;
+  tick(2, 40);
+  assert.equal(dbg.getCurrentRegion().id, 'whisperingForest');
+  assert.ok(seenRegionIds.includes('whisperingForest'), `updateEnvironment must pass active regionId to Env.update, saw [${seenRegionIds.join(', ')}]`);
+
+  // 6. Post-8/8 live cycle night restores Staff-Lantern glow automatically
+  dbg.Env.update = (dt, t, ctx) => origEnvUpdate(dt, t, { ...ctx, cycleTime: 360 });
+  tick(2, 40);
+  assert.ok(dbg.Env.getCelestialState().nightFactor > 0.8, 'Post-8/8 midnight must raise nightFactor > 0.8');
+  assert.ok(dbg.player.userData.staffLight.intensity > 1.0, `Staff-Lantern must glow warmly again during post-8/8 live night, got ${dbg.player.userData.staffLight.intensity}`);
+
+  // 7. Gerstner wave height & ocean swimming buoyancy
+  const w1 = dbg.Shaders.waterHeightAt(12, 55, 1.5);
+  const w2 = dbg.Shaders.waterHeightAt(12, 55, 2.7);
+  assert.ok(Math.abs(w1) < 0.25 && Math.abs(w2) < 0.25 && Math.abs(w1 - w2) > 0.001, 'Gerstner waterHeightAt must vary smoothly over time');
+  dbg.P.x = -14;
+  dbg.P.z = 55;
+  dbg.P.y = dbg.WATER_Y - 0.6;
+  dbg.P.vy = 0;
+  tick(4, 40);
+  assert.equal(dbg.P.swimming, true, 'Starkeeper in Sunken Bay ocean must enter buoyant swimming state');
+
+  // 8. Quality toggling scales both Env and World water tile resolution cleanly
+  const waterTilesBefore = dbg.scene.children.filter(c => c.geometry && c.geometry.attributes && c.geometry.attributes.aBedHeight);
+  assert.ok(waterTilesBefore.length > 0, 'World must contain water tile meshes');
+  assert.equal(waterTilesBefore[0].geometry.attributes.position.count, 25 * 25, 'High quality water tiles use 24x24 grid (625 verts)');
+
+  dbg.setQuality('balanced');
+  assert.equal(dbg.getQuality(), 'balanced');
+  assert.equal(dbg.Env.getQuality(), 'balanced');
+  const waterTilesBalanced = dbg.scene.children.filter(c => c.geometry && c.geometry.attributes && c.geometry.attributes.aBedHeight);
+  assert.equal(waterTilesBalanced[0].geometry.attributes.position.count, 17 * 17, 'Balanced quality water tiles shrink to 16x16 grid (289 verts)');
+
+  dbg.setQuality('high');
+  assert.equal(dbg.getQuality(), 'high');
+  assert.equal(dbg.Env.getQuality(), 'high');
+  const waterTilesHigh = dbg.scene.children.filter(c => c.geometry && c.geometry.attributes && c.geometry.attributes.aBedHeight);
+  assert.equal(waterTilesHigh[0].geometry.attributes.position.count, 25 * 25, 'Restoring High quality restores 24x24 water grid (625 verts)');
 });

@@ -2,7 +2,7 @@
 // game.js - Blobby Worlds: "The Starkeeper"
 //
 // Consumes globals:
-//   THREE, Sound, Textures, Shaders, world.js globals, Models, Physics
+//   THREE, Sound, Textures, Shaders, Env, Regions, world.js globals, Models, Rig, Physics, Animals, Enemies
 // Exposes:
 //   window.__GAME_DEBUG__
 // ============================================================
@@ -4015,11 +4015,35 @@ function loop(now) {
   updateCombatVfx(dt);
   updateLockHUD();
   updateChunks(P.x, P.z);
-  updateEnvironment(camera.position.y, P.x, P.z, time, dt);
+  const activeRegionId = currentRegion && currentRegion.id
+    ? currentRegion.id
+    : (typeof Regions !== 'undefined' && Regions && typeof Regions.regionAt === 'function' ? Regions.regionAt(P.x, P.z).id : '');
+  updateEnvironment(camera.position.y, P.x, P.z, time, dt, activeRegionId);
+  if (typeof Shaders !== 'undefined' && Shaders && typeof Shaders.setClothMotion === 'function') {
+    const envWindGust = (typeof Env !== 'undefined' && Env && typeof Env.getWindGust === 'function')
+      ? Env.getWindGust()
+      : null;
+    if (envWindGust !== null) {
+      const uCloth = Shaders.uniforms && Shaders.uniforms.uClothMotion && Shaders.uniforms.uClothMotion.value;
+      if (uCloth) {
+        Shaders.setClothMotion(uCloth.x, uCloth.y, uCloth.z, envWindGust);
+      } else {
+        const spd = Math.hypot(P.vx, P.vz);
+        const speedNorm = P.meleeStep === 7 && P.meleeT > 0 ? 1.55 : Math.min(1.6, Math.max(0, spd / 7.5));
+        const vertNorm = !P.onGround && !P.swimming ? Math.min(1.5, Math.max(-1.5, P.vy / 8.0)) : 0;
+        Shaders.setClothMotion(speedNorm, vertNorm, P.capeSway || 0, envWindGust);
+      }
+    }
+  }
   // Warm golden Star-Lantern illuminates the dark night around Starkeeper, softening as daylight returns
   if (player.userData && player.userData.staffLight) {
-    const p = typeof getSkyProgress === 'function' ? getSkyProgress() : Math.min(1, lit / DAY_SKY_MAX_LIT);
-    player.userData.staffLight.intensity = Math.max(0.18, 1.55 * (1 - p * 0.85) + Math.sin(time * 3.4) * 0.08);
+    const cel = (typeof Env !== 'undefined' && Env && typeof Env.getCelestialState === 'function')
+      ? Env.getCelestialState()
+      : null;
+    const lanternScale = (cel && typeof cel.nightFactor === 'number')
+      ? (0.15 + 0.85 * cel.nightFactor)
+      : (1 - (typeof getSkyProgress === 'function' ? getSkyProgress() : Math.min(1, lit / DAY_SKY_MAX_LIT)) * 0.85);
+    player.userData.staffLight.intensity = Math.max(0.18, 1.55 * lanternScale + Math.sin(time * 3.4) * 0.08);
   }
 
   renderer.render(scene, camera);
@@ -4066,6 +4090,7 @@ const debugHandle = {
   },
   Shaders,
   Textures,
+  Env: typeof Env !== 'undefined' ? Env : null,
   Sound: typeof Sound !== 'undefined' ? Sound : null,
   Regions: typeof Regions !== 'undefined' ? Regions : null,
   LAND,
