@@ -140,3 +140,48 @@ Modifications applied by scripts/build_enemies_glb.py:
   pelvis drift and leg-height-scaled vertical bounce.
 - Validated/repaired animation sampler counts, timestamps, unit quaternions,
   hemisphere continuity, and unit vertex normals across all 7 archetypes.
+
+-------------------------------------------------------------
+Environment Nature & Ruin 3D Models (assets/env/*.glb & *.glb.js)
+-------------------------------------------------------------
+
+Compiled by scripts/build_env_glb.py from the following Quaternius
+CC0 1.0 Universal (Public Domain Dedication) packs:
+
+1. Quaternius Ultimate Nature Pack (CC0 1.0 Universal):
+   - CommonTree_1.glb     -> assets/env/oak_tree.glb
+   - BirchTree_1.glb      -> assets/env/birch_tree.glb
+   - PineTree_1.glb       -> assets/env/pine_tree.glb
+   - PineTree_Snow_1.glb  -> assets/env/pine_snow.glb
+   - Willow_1.glb         -> assets/env/willow_tree.glb
+   - PalmTree_1.glb       -> assets/env/palm_tree.glb
+   - CactusFlower_1.glb   -> assets/env/cactus_flower.glb
+   - BushBerries_1.glb    -> assets/env/bush_berry.glb
+   - Rock_Moss_1.glb      -> assets/env/boulder_moss.glb
+   - Rock_3.glb           -> assets/env/boulder_rock.glb
+   - WoodLog_Moss.glb     -> assets/env/fallen_log.glb
+   - TreeStump_Moss.glb   -> assets/env/tree_stump.glb
+   - Lilypad.glb          -> assets/env/lilypad.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/nature_pack
+   - License: CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)
+
+2. Quaternius Modular Dungeon 1 Pack (CC0 1.0 Universal):
+   - Arch.glb             -> assets/env/ruin_arch.glb
+   - Pedestal.glb         -> assets/env/shrine_pedestal.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/modular_dungeon_1
+   - License: CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)
+
+3. Quaternius Modular Dungeon Pack (CC0 1.0 Universal):
+   - Column.glb           -> assets/env/ruin_column.glb
+   - Column_Broken.glb    -> assets/env/ruin_column_broken.glb
+   - Source mirror: https://github.com/trebeljahr/quaternius-showcase/tree/main/public/glb/modular_dungeon_pack
+   - License: CC0 1.0 Universal (https://creativecommons.org/publicdomain/zero/1.0/)
+
+Modifications applied by scripts/build_env_glb.py:
+- Wrapped scene roots under a unified EnvRoot node scaled to canonical
+  game heights with groundMinY = 0.0 and trunk/AABB X/Z centering.
+- Computed crease-aware smooth vertex NORMALs and generated world-scale
+  box/planar TEXCOORD_0 UVs across every primitive, welding shared vertices.
+- Normalized material slot names (Bark, Leaves, Snow, Stone, Moss, Flower)
+  and stripped non-core glTF extensions for strict Three.js r128 support.
+- Emitted dual-mode .glb binary and .glb.js (window.__ENV_GLB_B64__) pairs.
