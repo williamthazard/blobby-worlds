@@ -450,7 +450,6 @@ void main() {
   }
 
   // Schlick Fresnel (F0 = 0.02 for water)
-  float ndv = max(dot(N, V), 0.0);
   float fresnel = 0.02 + 0.98 * pow(max(1.0 - max(dot(N, V), 0.0), 0.0001), 5.0);
 
   // Beer-Lambert optical spectral absorption (clear sunlit turquoise shallows -> deep sapphire bay)
@@ -664,11 +663,16 @@ void main() {
   // Night-only Milky Way galactic dust ribbon tilted across upper sky (completely off in daylight)
   if (dir.y > 0.01 && nightMask > 0.001) {
     vec3 galAxis = normalize(vec3(0.42, 0.56, -0.71));
-    float galLat = abs(dot(dir, galAxis));
+    vec3 galU = normalize(cross(vec3(0.0, 1.0, 0.0), galAxis));
+    vec3 galV = cross(galAxis, galU);
+    float gAlong = dot(dir, galU);
+    float gAcross = dot(dir, galV);
+    float galLat = dot(dir, galAxis);
     float galBand = exp(-galLat * galLat * 18.0);
-    vec2 galUv = vec2(atan(dir.z, dir.x) * 1.6, dot(dir, galAxis) * 4.5);
-    float galCloud = fbm2(galUv * 2.2 + vec2(7.3, 2.1));
-    float dustLane = smoothstep(0.36, 0.68, fbm2(galUv * 4.8 + vec2(19.1, 5.7)));
+    vec2 galUvA = vec2(gAlong * 2.8 + gAcross * 1.4, galLat * 5.2);
+    vec2 galUvB = vec2(gAcross * 2.8 - gAlong * 1.4, galLat * 5.2 + gAlong * 0.8);
+    float galCloud = 0.55 * fbm2(galUvA * 1.8 + vec2(7.3, 2.1)) + 0.45 * fbm2(galUvB * 2.1 + vec2(3.1, 11.7));
+    float dustLane = smoothstep(0.36, 0.68, fbm2(galUvA * 3.8 + vec2(19.1, 5.7)));
     float milky = galBand * smoothstep(0.32, 0.82, galCloud) * (1.0 - dustLane * 0.55);
     float galHorizon = smoothstep(0.02, 0.25, dir.y);
     vec3 milkyCol = mix(vec3(0.07, 0.11, 0.23), vec3(0.14, 0.15, 0.24), galCloud);
@@ -718,14 +722,16 @@ void main() {
       vec2 cr1Off = vec2(hash21(cr1Id) - 0.5, hash21(cr1Id + 17.3) - 0.5) * 0.38;
       float dCr1 = length(cr1 - cr1Off);
       float rCr1 = 0.18 + 0.14 * hash21(cr1Id + 43.1);
-      float craterRim1 = exp(-pow((dCr1 - rCr1) / 0.055, 2.0)) * 0.22;
+      float rimK1 = (dCr1 - rCr1) / 0.055;
+      float craterRim1 = exp(-(rimK1 * rimK1)) * 0.22;
       float craterBasin1 = (1.0 - smoothstep(0.0, rCr1, dCr1)) * 0.26;
 
       vec2 cr2 = fract(mProj * 8.4 + 2.3) - 0.5;
       vec2 cr2Id = floor(mProj * 8.4 + 2.3);
       float dCr2 = length(cr2 - (vec2(hash21(cr2Id), hash21(cr2Id + 9.1)) - 0.5) * 0.32);
       float rCr2 = 0.16 + 0.12 * hash21(cr2Id + 31.7);
-      float craterRim2 = exp(-pow((dCr2 - rCr2) / 0.05, 2.0)) * 0.15;
+      float rimK2 = (dCr2 - rCr2) / 0.05;
+      float craterRim2 = exp(-(rimK2 * rimK2)) * 0.15;
       float craterBasin2 = (1.0 - smoothstep(0.0, rCr2, dCr2)) * 0.18;
 
       float craterRelief = lunarAlbedo + craterRim1 + craterRim2 - craterBasin1 - craterBasin2;
@@ -1014,6 +1020,11 @@ void main() {
 
   function patchMaterialHook(mat, tag, compileFn) {
     if (!mat) return mat;
+    if (!mat.userData) mat.userData = {};
+    if (!mat.userData._shaderHooks) mat.userData._shaderHooks = {};
+    if (mat.userData._shaderHooks[tag]) return mat;
+    mat.userData._shaderHooks[tag] = true;
+
     const proto = typeof THREE !== 'undefined' && THREE.Material && THREE.Material.prototype;
     const prevKey = typeof mat.customProgramCacheKey === 'function' && (!proto || mat.customProgramCacheKey !== proto.customProgramCacheKey)
       ? mat.customProgramCacheKey
@@ -1145,7 +1156,7 @@ float farDist = length( vWorldPos.xz - uCamPos.xz );
 float farTurf = smoothstep( 44.0, 74.0, farDist ) * ( 1.0 - rockBlend ) * aboveWaterT;
 vec2 wDirT = normalize( uWindVec.xy + vec2( 0.0001, 0.0 ) );
 float windWaveT = sin( dot( vWorldPos.xz, wDirT ) * 0.20 - uTime * 1.85 - uWindVec.w * 0.6 ) * 0.5 + 0.5;
-float turfMask = farTurf * smoothstep( 0.06, 0.34, diffuseColor.g - diffuseColor.b * 0.45 );
+float turfMask = farTurf * smoothstep( 0.02, 0.14, diffuseColor.g - max( diffuseColor.r, diffuseColor.b ) );
 diffuseColor.rgb += vec3( 0.042, 0.062, 0.016 ) * ( windWaveT * turfMask * ( 0.45 + 0.55 * clamp( uWindVec.z, 0.0, 1.5 ) ) );
 
 // Animated shallow underwater caustics fading smoothly with depth
@@ -1489,8 +1500,9 @@ gl_Position = projectionMatrix * mvPosition;`
         )
         .replace(
           '#include <worldpos_vertex>',
-          `#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )
-  vec4 worldPosition = tWorld;
+          `#include <worldpos_vertex>
+#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )
+  worldPosition = tWorld;
 #endif`
         );
 
@@ -1525,7 +1537,12 @@ diffuseColor.rgb += tSunLin * ( diffuseColor.rgb * tBack * tSunUp * 0.34 );`
     const amp = cfg.amp !== undefined ? cfg.amp : 0.14;
     const heightScale = cfg.heightScale !== undefined ? cfg.heightScale : 1.25;
     const useUvY = !!cfg.useUvY;
-    const tag = cfg.tag || 'foliage_reactive_v1';
+    const ampStr = Number(amp).toFixed(4);
+    const hStr = Math.max(0.1, Number(heightScale)).toFixed(3);
+    const isDefault = ampStr === '0.1400' && hStr === '1.250' && !useUvY;
+    const tag = cfg.tag || (isDefault
+      ? 'foliage_reactive_v1'
+      : `foliage_reactive_v1_a${ampStr}_h${hStr}_u${useUvY ? 1 : 0}`);
 
     return patchMaterialHook(mat, tag, (shader) => {
       shader.uniforms.uTime = uniforms.uTime;
@@ -1539,7 +1556,7 @@ diffuseColor.rgb += tSunLin * ( diffuseColor.rgb * tBack * tSunUp * 0.34 );`
 
       const flexExpr = useUvY
         ? 'clamp( uv.y, 0.0, 1.0 )'
-        : `clamp( position.y / ${Math.max(0.1, heightScale).toFixed(3)}, 0.0, 1.0 )`;
+        : `clamp( position.y / ${hStr}, 0.0, 1.0 )`;
 
       shader.vertexShader = shader.vertexShader
         .replace(
@@ -1579,7 +1596,7 @@ float fWindStr = max( 0.25, uWindVec.z );
 float fWave = sin( dot( folBaseWorld.xz, fWindDir ) * 0.20 - uTime * 2.05 - uWindVec.w ) * 0.68
             + cos( fWorld.x * 1.15 - fWorld.z * 0.95 + uTime * 3.8 ) * 0.32;
 vec2 fGust = ( fWindDir * fWave + fWindPerp * ( sin( fWorld.z * 1.3 + uTime * 3.1 ) * 0.25 ) )
-           * ( ${(amp).toFixed(4)} * fWindStr * folWeight );
+           * ( ${ampStr} * fWindStr * folWeight );
 fWorld.xz += fGust;
 fWorld.y -= length( fGust ) * 0.18;
 
@@ -1626,8 +1643,9 @@ gl_Position = projectionMatrix * mvPosition;`
         )
         .replace(
           '#include <worldpos_vertex>',
-          `#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )
-  vec4 worldPosition = fWorld;
+          `#include <worldpos_vertex>
+#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION )
+  worldPosition = fWorld;
 #endif`
         );
 
@@ -1659,7 +1677,10 @@ diffuseColor.rgb += fSunLin * ( diffuseColor.rgb * fBack * vFolTip * fSunUp * 0.
     if (!mat) return mat;
     const cfg = opts || {};
     const intensity = cfg.intensity !== undefined ? cfg.intensity : 0.72;
-    const tag = cfg.tag || 'underwater_caustics_v1';
+    const intStr = Number(intensity).toFixed(3);
+    const tag = cfg.tag || (intStr === '0.720'
+      ? 'underwater_caustics_v1'
+      : `underwater_caustics_v1_i${intStr}`);
 
     return patchMaterialHook(mat, tag, (shader) => {
       shader.uniforms.uTime = uniforms.uTime;

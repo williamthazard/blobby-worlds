@@ -727,3 +727,109 @@ test('Sub-Project 4 PBR environment shaders: Moon/Milky Way sky, Gerstner water 
     }
   }
 });
+
+test('Review fixes: safe Moon crater rim math, seam-free Milky Way basis, idempotent & chained hooks, option cache keys, and terrain/water polish', () => {
+  const { S, THREE, Textures } = loadShadersWithMocks();
+
+  // 1. No pow(negative, 2.0) on Moon craters & no atan() Milky Way seam/singularity
+  assert.doesNotMatch(S._SKY_FRAG, /pow\(\s*\(\s*dCr[12]\s*-\s*rCr[12]/, 'Moon crater rim must square via multiplication, never pow(signed, 2.0)');
+  assert.doesNotMatch(S._SKY_FRAG, /\batan\s*\(/, 'Milky Way projection must use continuous galactic basis, not atan()');
+  assert.match(S._SKY_FRAG, /\bgalU\b/);
+  assert.match(S._SKY_FRAG, /\bgalV\b/);
+
+  // 2. Water unused ndv removed & Terrain turf sheen gated against snow/sand red channel
+  assert.doesNotMatch(S._WATER_FRAG, /\bfloat\s+ndv\s*=/);
+  const baseShader = () => ({
+    uniforms: {},
+    vertexShader: [
+      '#define STANDARD',
+      '#include <common>',
+      'void main() {',
+      '  #include <beginnormal_vertex>',
+      '  #include <begin_vertex>',
+      '  #include <project_vertex>',
+      '  #include <worldpos_vertex>',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      '#define STANDARD',
+      '#include <common>',
+      'void main() {',
+      '  vec4 diffuseColor = vec4(1.0);',
+      '  float roughnessFactor = 0.8;',
+      '  #include <color_fragment>',
+      '  #include <roughnessmap_fragment>',
+      '  #include <normal_fragment_begin>',
+      '  #include <normal_fragment_maps>',
+      '}',
+    ].join('\n'),
+  });
+
+  const tMat = S.createTerrainMaterial(Textures);
+  const tSh = baseShader();
+  tMat.onBeforeCompile(tSh);
+  assert.match(tSh.fragmentShader, /diffuseColor\.g\s*-\s*max\(\s*diffuseColor\.r,\s*diffuseColor\.b\s*\)/);
+
+  // 3. Idempotent double-patching on shared materials (zero duplicate declarations)
+  const sharedReact = new THREE.MeshStandardMaterial();
+  S.patchFoliageReactive(sharedReact);
+  const keyOnce = sharedReact.customProgramCacheKey();
+  S.patchFoliageReactive(sharedReact);
+  assert.equal(sharedReact.customProgramCacheKey(), keyOnce, 'Double-patching patchFoliageReactive must be idempotent');
+  const rs = baseShader();
+  sharedReact.onBeforeCompile(rs);
+  assert.equal((rs.vertexShader.match(/varying float vFolTip;/g) || []).length, 1, 'Double-patched foliage must declare vFolTip once');
+
+  const sharedTree = new THREE.MeshStandardMaterial();
+  S.patchTreeWind(sharedTree, true);
+  S.patchTreeWind(sharedTree, true);
+  const ts = baseShader();
+  sharedTree.onBeforeCompile(ts);
+  assert.equal((ts.vertexShader.match(/varying vec3 vTreeLeafWorld;/g) || []).length, 1, 'Double-patched tree must declare vTreeLeafWorld once');
+
+  const sharedCaustic = new THREE.MeshStandardMaterial();
+  S.patchUnderwaterCaustics(sharedCaustic);
+  S.patchUnderwaterCaustics(sharedCaustic);
+  const cs = baseShader();
+  sharedCaustic.onBeforeCompile(cs);
+  assert.equal((cs.vertexShader.match(/varying vec3 vCausticWorldPos;/g) || []).length, 1, 'Double-patched caustics must declare vCausticWorldPos once');
+
+  // 4. Chaining patchFoliageReactive + patchUnderwaterCaustics preserves #include <worldpos_vertex>
+  const chainedMat = new THREE.MeshStandardMaterial();
+  S.patchFoliageReactive(chainedMat);
+  S.patchUnderwaterCaustics(chainedMat);
+  assert.equal(chainedMat.customProgramCacheKey(), 'foliage_reactive_v1|underwater_caustics_v1');
+  const chShader = baseShader();
+  chainedMat.onBeforeCompile(chShader);
+  assert.match(chShader.vertexShader, /#include <worldpos_vertex>/, 'patchFoliageReactive must preserve #include <worldpos_vertex>');
+  assert.match(chShader.vertexShader, /\bvFolWorld\b/);
+  assert.match(chShader.vertexShader, /\bvCausticWorldPos\b/);
+  assert.match(chShader.fragmentShader, /\bvFolTip\b/);
+  assert.match(chShader.fragmentShader, /causticPattern/);
+
+  // 5. Distinct cache keys for non-default options without explicit cfg.tag
+  const reactDef = S.patchFoliageReactive(new THREE.MeshStandardMaterial());
+  const reactAmp = S.patchFoliageReactive(new THREE.MeshStandardMaterial(), { amp: 0.22 });
+  const reactHeight = S.patchFoliageReactive(new THREE.MeshStandardMaterial(), { heightScale: 1.8 });
+  const reactUv = S.patchFoliageReactive(new THREE.MeshStandardMaterial(), { useUvY: true });
+  assert.equal(reactDef.customProgramCacheKey(), 'foliage_reactive_v1');
+  assert.equal(
+    new Set([
+      reactDef.customProgramCacheKey(),
+      reactAmp.customProgramCacheKey(),
+      reactHeight.customProgramCacheKey(),
+      reactUv.customProgramCacheKey(),
+    ]).size,
+    4,
+    'patchFoliageReactive must generate distinct cache keys for distinct non-default options'
+  );
+
+  const caustDef = S.patchUnderwaterCaustics(new THREE.MeshStandardMaterial());
+  const caustHigh = S.patchUnderwaterCaustics(new THREE.MeshStandardMaterial(), { intensity: 0.9 });
+  assert.equal(caustDef.customProgramCacheKey(), 'underwater_caustics_v1');
+  assert.notEqual(
+    caustDef.customProgramCacheKey(),
+    caustHigh.customProgramCacheKey(),
+    'patchUnderwaterCaustics must generate distinct cache keys for distinct intensity values'
+  );
+});

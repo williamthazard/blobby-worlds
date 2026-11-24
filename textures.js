@@ -958,8 +958,8 @@ const Textures = (() => {
           ctx.strokeStyle = 'rgba(136, 98, 66, 0.45)';
           ctx.lineWidth = Math.max(1, t[4] * 0.35 * scale);
           ctx.beginPath();
-          ctx.moveTo(cx + t[0] * size - 1, cy + t[1] * size - 1);
-          ctx.lineTo(cx + t[2] * size - 1, cy + t[3] * size - 1);
+          ctx.moveTo(cx + t[0] * size - 1 * scale, cy + t[1] * size - 1 * scale);
+          ctx.lineTo(cx + t[2] * size - 1 * scale, cy + t[3] * size - 1 * scale);
           ctx.stroke();
         }
 
