@@ -2731,3 +2731,67 @@ test('Band diversity synergy, defense mitigation, aerial anti-Stinger focus, and
   });
   assert.equal(receivedStats, wildStats, 'Befriending a wild animal must preserve its exact rolled individual stats');
 });
+
+test('Regression: eat/sleep/idle clips NEVER match Death ("d-eat-h") on Velociraptor drake, firefly, or any real animal GLB', () => {
+  const h = loadAnimalsHarness();
+  const realDir = new URL('../assets/animals/', import.meta.url);
+  const glbFiles = fs.readdirSync(realDir).filter((f) => f.endsWith('.glb'));
+  assert.ok(glbFiles.length >= 13, 'Expected all 13 animal GLB files');
+
+  const nonDeathSemantics = ['idle', 'idleAlt', 'eat', 'sleep', 'walk', 'run', 'jump', 'attack', 'hit', 'swim', 'swimFast', 'fly'];
+
+  // Verify Velociraptor drake (Armature|Velociraptor_Death) and Firefly (WaspArmature|Wasp_Death) never play Death when grazing/resting!
+  for (const [spName, arch, spPlan] of [
+    ['Ember Drake', 'drake', 'lizard'],
+    ['Lantern Firefly', 'firefly', 'bug'],
+  ]) {
+    const glbBuf = fs.readFileSync(new URL(arch + '.glb', realDir));
+    const jsonLen = glbBuf.readUInt32LE(12);
+    const gltf = JSON.parse(glbBuf.subarray(20, 20 + jsonLen).toString('utf8'));
+    const clipNames = (gltf.animations || []).map((a) => a.name);
+
+    // Override GLTFLoader to supply the exact real animation clip names from the GLB
+    const hReal = loadAnimalsHarness();
+    const playedClips = [];
+    const OrigLoader = hReal.THREE.GLTFLoader;
+    hReal.THREE.GLTFLoader = class extends OrigLoader {
+      load(url, onLoad) {
+        const mock = makeMockArchetypeGltf(hReal.THREE, arch);
+        mock.animations = clipNames.map((name) => ({ name, duration: 1.0, tracks: [] }));
+        onLoad(mock);
+      }
+    };
+    const root = new hReal.THREE.Group(spName);
+    const ctrl = hReal.Animals.attachToCritter(root, { name: spName, plan: spPlan, archetype: arch });
+    assert.equal(ctrl.ready, true);
+
+    const mixer = hReal.THREE._mixers[0];
+    assert.ok(mixer && mixer.actions instanceof Map, 'Mixer should record created clip actions');
+
+    // Drive every non-death semantic mode (especially 'eat' and 'sleep') and assert active clip NEVER contains 'death' or 'dead'
+    for (const mode of nonDeathSemantics) {
+      ctrl.update(0.05, 1.0, {
+        mode,
+        speed: mode === 'walk' ? 2.5 : mode === 'run' ? 6.0 : 0,
+        refSpeed: 3.0,
+        airborne: mode === 'fly' || mode === 'jump',
+        inWater: mode === 'swim' || mode === 'swimFast',
+        hurtFlash: 0,
+        isMoving: mode === 'walk' || mode === 'run' || mode === 'fly',
+        facingYaw: 0,
+        posX: 0,
+        posY: 0,
+        posZ: 0,
+      });
+      const active = [...mixer.actions.values()].find((a) => a.playing && a.weight > 0);
+      assert.ok(active && active._clip, `${spName} mode="${mode}" should have an active playing clip`);
+      playedClips.push({ mode, clip: active._clip.name });
+      assert.equal(
+        /death|dead/i.test(active._clip.name),
+        false,
+        `${spName} mode="${mode}" must NEVER route to death clip (got "${active._clip.name}")`
+      );
+    }
+    assert.ok(playedClips.some((p) => p.mode === 'eat'), `${spName} eat mode should be verified`);
+  }
+});

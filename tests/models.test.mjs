@@ -399,6 +399,24 @@ test('Models exposes shared Starkeeper attachment factories and proceduralRoot w
 
   const hat = M.makeStarkeeperHat();
   assert.ok(hat instanceof THREE.Group && hat.userData.hatTipStar, 'makeStarkeeperHat must return astronomer hat group');
+  const { crownCone, hatBand } = hat.userData;
+  assert.equal(crownCone.geometry.args[4], true, 'hat crownCone must be open-ended so no bottom cap slices through the brim');
+  assert.equal(crownCone.position.x, hatBand.position.x, 'hatBand must be coaxial with crownCone base (X)');
+  assert.equal(crownCone.position.z, hatBand.position.z, 'hatBand must be coaxial with crownCone base (Z)');
+  assert.equal(crownCone.rotation.x, 0, 'hat crownCone base must sit flush without intersecting brim/hatBand');
+  const bandTopR = hatBand.geometry.args[0];
+  const bandBotR = hatBand.geometry.args[1];
+  const bandH = hatBand.geometry.args[2];
+  const bandBotY = hatBand.position.y - bandH * 0.5;
+  const bandTopY = hatBand.position.y + bandH * 0.5;
+  const coneBaseR = crownCone.geometry.args[0];
+  const coneH = crownCone.geometry.args[1];
+  const coneBotY = crownCone.position.y - coneH * 0.5;
+  const coneRAtBandBot = coneBaseR * (1 - (bandBotY - coneBotY) / coneH);
+  const coneRAtBandTop = coneBaseR * (1 - (bandTopY - coneBotY) / coneH);
+  assert.ok(bandBotR - coneRAtBandBot >= 0.015, `hatBand bottom must clear crownCone by >= 15mm, got ${((bandBotR - coneRAtBandBot) * 1000).toFixed(1)}mm`);
+  assert.ok(bandTopR - coneRAtBandTop >= 0.015, `hatBand top must clear crownCone by >= 15mm, got ${((bandTopR - coneRAtBandTop) * 1000).toFixed(1)}mm`);
+  assert.ok(bandBotY >= 0.012 && bandTopY >= 0.065, `hatBand must sit cleanly above brim underside and clear curved brim crest (y=${bandBotY.toFixed(3)}..${bandTopY.toFixed(3)})`);
 
   const cloak = M.makeStarkeeperCloak();
   assert.ok(

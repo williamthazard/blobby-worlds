@@ -212,6 +212,23 @@ const Models = (() => {
     return geometry;
   }
 
+  function sculptHatConeGeo(geometry, height = 0.36) {
+    if (!geometry.attributes || !geometry.attributes.position) return geometry;
+    const pos = geometry.attributes.position;
+    const halfH = height * 0.5;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const t = Math.max(0, Math.min(1, (y + halfH) / height));
+      // Keep the crown base circular and flush with the hatband, curving the upper tip jauntily back-left
+      const bend = t * t;
+      pos.setXYZ(i, x - bend * 0.030, y, z - bend * 0.088);
+    }
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
   function taperCapeGeo(geometry, topScale, botScale, wrapCurve, pleatCount = 0, pleatAmp = 0) {
     if (!geometry.attributes || !geometry.attributes.position) return geometry;
     const pos = geometry.attributes.position;
@@ -1473,37 +1490,36 @@ const Models = (() => {
     brimTrim.position.y = 0.001;
 
     const crownCone = makeMesh(
-      geo('player_hat_cone', () => new THREE.ConeGeometry(0.225, 0.36, 18)),
+      geo('player_hat_cone_v2', () => sculptHatConeGeo(new THREE.ConeGeometry(0.206, 0.36, 24, 10, true), 0.36)),
       s.hatCloth
     );
-    crownCone.position.set(0.015, 0.18, -0.03);
-    crownCone.rotation.x = -0.18;
-    crownCone.rotation.z = 0.07;
+    // Open-ended base sits flush inside the brim thickness (y = +0.014) while upper tip curves back-left
+    crownCone.position.set(0.006, 0.194, -0.014);
 
+    // Coaxial conical brass collar band wrapping strictly outside crownCone (+18..20mm radial clearance)
+    // and rising well above the curved brim crest so cone, band, and brim NEVER Z-fight!
     const hatBand = makeMesh(
-      geo('player_hat_band_v2', () => new THREE.TorusGeometry(0.218, 0.020, 8, 24)),
+      geo('player_hat_band_v3', () => new THREE.CylinderGeometry(0.194, 0.224, 0.056, 28, 1, false)),
       s.brass
     );
-    hatBand.rotation.x = Math.PI / 2;
-    // Seated cleanly above the brim wave crest so it NEVER pokes through the brim underside over his forehead!
-    hatBand.position.set(0.004, 0.048, -0.016);
+    hatBand.position.set(0.006, 0.044, -0.014);
 
     const hatPin = makeMesh(
       geo('player_hat_pin', () => new THREE.OctahedronGeometry(0.036, 0)),
       s.goldTrim
     );
-    hatPin.position.set(-0.145, 0.056, 0.178);
+    hatPin.position.set(-0.148, 0.048, 0.160);
     hatPin.scale.set(1, 1, 0.5);
 
     const hatTipStar = makeMesh(
       geo('player_hat_star', () => new THREE.OctahedronGeometry(0.05, 0)),
       s.starCrystal
     );
-    hatTipStar.position.set(-0.015, 0.375, -0.09);
+    hatTipStar.position.set(-0.024, 0.382, -0.102);
     hatTipStar.scale.set(1, 1.25, 1);
 
     const hatStarGlow = makeGlow(0xffe066, 0.34, 0.65, true);
-    hatStarGlow.position.set(-0.015, 0.375, -0.09);
+    hatStarGlow.position.set(-0.024, 0.382, -0.102);
 
     hatGroup.add(brim, brimTrim, crownCone, hatBand, hatPin, hatTipStar, hatStarGlow);
     hatGroup.userData = { brim, crownCone, hatBand, hatTipStar, hatStarGlow };

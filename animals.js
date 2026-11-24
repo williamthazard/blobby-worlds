@@ -822,10 +822,12 @@ const Animals = (() => {
       return null;
     }
 
-    const first = clips[0] || null;
+    const isDeathName = (s) => s === 'death' || s === 'dead' || s.includes('death') || s.includes('dead');
+
+    const first = clips.find((_, idx) => !isDeathName(shortNames[idx])) || clips[0] || null;
     const idle = pickMatch([
       (s) => s === 'idle',
-      (s) => s.includes('idle') && !s.includes('2') && !s.includes('headlow') && !s.includes('hit') && !s.includes('jump'),
+      (s) => !isDeathName(s) && s.includes('idle') && !s.includes('2') && !s.includes('headlow') && !s.includes('hit') && !s.includes('jump'),
       (s) => s === 'swimming_normal' || s === 'flying' || s === 'swim',
       (s) => s.includes('parrot'),
     ]) || first;
@@ -833,47 +835,47 @@ const Animals = (() => {
     const idleAlt = pickMatch([
       (s) => s === 'idle_2' || s === 'alert',
       (s) => s === 'groom' || s === 'tripod',
-      (s) => s.includes('headlow') || s.includes('idle_2'),
+      (s) => !isDeathName(s) && (s.includes('headlow') || s.includes('idle_2')),
     ]) || idle;
 
     const eat = pickMatch([
       (s) => s === 'eating' || s === 'eat',
-      (s) => s.includes('eat') || s === 'groom',
-      (s) => s.includes('headlow'),
+      (s) => !isDeathName(s) && (/(^|_)eat(ing)?($|_)/.test(s) || s === 'groom'),
+      (s) => !isDeathName(s) && s.includes('headlow'),
     ]) || idleAlt;
 
     const sleep = pickMatch([
-      (s) => s === 'sleep' || s.includes('sleep'),
-      (s) => s.includes('headlow'),
+      (s) => !isDeathName(s) && (s === 'sleep' || s.includes('sleep')),
+      (s) => !isDeathName(s) && s.includes('headlow'),
     ]) || idleAlt;
 
     const walk = pickMatch([
       (s) => s === 'walk',
-      (s) => s.includes('walk') && !s.includes('back'),
+      (s) => !isDeathName(s) && s.includes('walk') && !s.includes('back'),
       (s) => s === 'swimming_normal' || s === 'flying' || s === 'swim',
     ]) || idle;
 
     const run = pickMatch([
       (s) => s === 'gallop' || s === 'run',
-      (s) => (s.includes('gallop') || s.includes('run')) && !s.includes('jump'),
+      (s) => !isDeathName(s) && (s.includes('gallop') || s.includes('run')) && !s.includes('jump'),
       (s) => s === 'swimming_fast' || s === 'tripod',
     ]) || walk;
 
     const jump = pickMatch([
       (s) => s === 'gallop_jump' || s === 'jump',
-      (s) => s.includes('jump') && !s.includes('toidle') && !s.includes('to_idle'),
+      (s) => !isDeathName(s) && s.includes('jump') && !s.includes('toidle') && !s.includes('to_idle'),
       (s) => s === 'swimming_impulse',
     ]) || run;
 
     const attack = pickMatch([
       (s) => s === 'attack' || s === 'attack_headbutt',
-      (s) => s.includes('attack'),
+      (s) => !isDeathName(s) && s.includes('attack'),
     ]) || jump;
 
     const hit = pickMatch([
-      (s) => s.includes('hitreact') || s === 'hit',
-      (s) => s.includes('hit') || s === 'out_of_water',
-      (s) => s.includes('jump_toidle') || s.includes('jump_to_idle'),
+      (s) => !isDeathName(s) && (s.includes('hitreact') || s === 'hit'),
+      (s) => !isDeathName(s) && (s.includes('hit') || s === 'out_of_water'),
+      (s) => !isDeathName(s) && (s.includes('jump_toidle') || s.includes('jump_to_idle')),
     ]) || idleAlt;
 
     const death = pickMatch([
