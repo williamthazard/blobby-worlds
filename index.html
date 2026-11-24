@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Blobby Worlds: The Starkeeper</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,2 20,12 30,16 20,20 16,30 12,20 2,16 12,12' fill='%23ffd93b'/%3E%3C/svg%3E">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <style>
   :root {
     --target-size: 28px;
@@ -21,6 +21,7 @@
     height: 100%;
     height: 100dvh;
     overflow: hidden;
+    touch-action: none;
   }
   body {
     font-family: "Avenir Next", Avenir, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -435,6 +436,7 @@
     max-block-size: calc(100dvh - 84px - var(--safe-top) - var(--safe-bottom));
     overflow-y: auto;
     overscroll-behavior: contain;
+    touch-action: pan-y;
     box-sizing: border-box;
     background: rgba(14, 20, 40, 0.90);
     -webkit-backdrop-filter: blur(10px);
@@ -541,6 +543,9 @@
     pointer-events: none;
     display: none;
     touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   body.touch-ui.game-started #touchControls {
     display: block;
@@ -560,6 +565,9 @@
     justify-content: center;
     pointer-events: auto;
     touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
     transition: border-color 0.14s ease, box-shadow 0.14s ease;
   }
   #touchJoyBase.active {
@@ -599,6 +607,10 @@
     width: 174px;
     height: 158px;
     pointer-events: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .touchBtn {
     position: absolute;
@@ -621,6 +633,9 @@
     padding: 0;
     pointer-events: auto;
     touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
     cursor: pointer;
     transition: transform 0.08s ease, background-color 0.12s ease, border-color 0.12s ease;
   }
@@ -697,6 +712,7 @@
     text-align: center;
     overflow-y: auto;
     overscroll-behavior: contain;
+    touch-action: pan-y;
     box-sizing: border-box;
     padding: max(22px, var(--safe-top)) max(20px, var(--safe-right)) max(24px, var(--safe-bottom)) max(20px, var(--safe-left));
   }

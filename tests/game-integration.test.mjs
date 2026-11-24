@@ -634,11 +634,21 @@ function makeMockDocument({ withCanvas = false } = {}) {
         },
         contains: (c) => classes.has(c),
       },
-      addEventListener: (ev, fn) => {
-        (listeners[ev] ||= []).push(fn);
+      addEventListener: (ev, fn, opts) => {
+        (listeners[ev] ||= []).push({ fn, opts });
       },
+      removeEventListener: (ev, fn) => {
+        if (!listeners[ev]) return;
+        listeners[ev] = listeners[ev].filter(entry => entry.fn !== fn);
+      },
+      dispatchEvent: (evObj) => {
+        const list = (listeners[evObj.type] || []).slice();
+        for (const entry of list) entry.fn(evObj);
+      },
+      getListeners: (ev) => listeners[ev] || [],
+      getBoundingClientRect: () => el._rect || { left: 20, top: 400, width: 120, height: 120 },
       click: () => {
-        for (const fn of (listeners.click || [])) fn({ target: el });
+        for (const entry of (listeners.click || [])) entry.fn({ target: el });
       },
     };
     elements.set(id, el);
@@ -652,6 +662,7 @@ function makeMockDocument({ withCanvas = false } = {}) {
     makeEl(id);
   }
   const bodyClasses = new Set();
+  const docListeners = {};
   const doc = {
     elements,
     head: { appendChild() {} },
@@ -670,6 +681,18 @@ function makeMockDocument({ withCanvas = false } = {}) {
       },
     },
     getElementById: (id) => elements.get(id) || makeEl(id),
+    addEventListener: (ev, fn, opts) => {
+      (docListeners[ev] ||= []).push({ fn, opts });
+    },
+    removeEventListener: (ev, fn) => {
+      if (!docListeners[ev]) return;
+      docListeners[ev] = docListeners[ev].filter(entry => entry.fn !== fn);
+    },
+    dispatchEvent: (evObj) => {
+      const list = (docListeners[evObj.type] || []).slice();
+      for (const entry of list) entry.fn(evObj);
+    },
+    getListeners: (ev) => docListeners[ev] || [],
   };
   if (withCanvas) {
     doc.createElement = (tag) => {
@@ -743,7 +766,20 @@ function loadGameHarness({ hash = '', fullWorld = false } = {}) {
     exponentialRampToValueAtTime: () => {},
     setTargetAtTime: () => {},
   });
+  const winListeners = {};
   const windowObj = {
+    addEventListener: (ev, fn, opts) => {
+      (winListeners[ev] ||= []).push({ fn, opts });
+    },
+    removeEventListener: (ev, fn) => {
+      if (!winListeners[ev]) return;
+      winListeners[ev] = winListeners[ev].filter(entry => entry.fn !== fn);
+    },
+    dispatchEvent: (evObj) => {
+      const list = (winListeners[evObj.type] || []).slice();
+      for (const entry of list) entry.fn(evObj);
+    },
+    getListeners: (ev) => winListeners[ev] || [],
     AudioContext: function () {
       return {
         currentTime: 0,
@@ -787,7 +823,8 @@ function loadGameHarness({ hash = '', fullWorld = false } = {}) {
     clearTimeout: () => {},
     setInterval: () => 1,
     requestAnimationFrame: (fn) => { rafQueue.push(fn); return rafQueue.length; },
-    addEventListener: () => {},
+    addEventListener: windowObj.addEventListener,
+    removeEventListener: windowObj.removeEventListener,
     innerWidth: 1280,
     innerHeight: 720,
     devicePixelRatio: 2,
@@ -894,6 +931,7 @@ function loadGameHarness({ hash = '', fullWorld = false } = {}) {
     sandbox,
     dbg,
     doc,
+    win: windowObj,
     scene: fullWorld ? dbg.scene : mockScene,
     THREE,
     rafQueue,
@@ -1976,3 +2014,323 @@ test('Sub-Project 4 Env wiring: moonlit night -> sunlit day -> live cycle, zero 
   const waterTilesHigh = dbg.scene.children.filter(c => c.geometry && c.geometry.attributes && c.geometry.attributes.aBedHeight);
   assert.equal(waterTilesHigh[0].geometry.attributes.position.count, 25 * 25, 'Restoring High quality restores 24x24 water grid (625 verts)');
 });
+
+test('index.html locks mobile zoom via viewport & touch-action rules while keeping modals scrollable', () => {
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const viewportMatch = html.match(/<meta\s+name="viewport"\s+content="([^"]+)"/i);
+  assert.ok(viewportMatch, 'viewport meta tag must exist');
+  const vp = viewportMatch[1];
+  assert.ok(vp.includes('maximum-scale=1'), `viewport must include maximum-scale=1, got "${vp}"`);
+  assert.ok(vp.includes('user-scalable=no'), `viewport must include user-scalable=no, got "${vp}"`);
+  assert.ok(vp.includes('viewport-fit=cover'), `viewport must include viewport-fit=cover, got "${vp}"`);
+
+  const extractBlock = (selector) => {
+    const idx = html.indexOf(`${selector} {`);
+    assert.ok(idx >= 0, `CSS block for "${selector}" must exist`);
+    const end = html.indexOf('}', idx);
+    return html.slice(idx, end);
+  };
+
+  const htmlBodyCss = extractBlock('html, body');
+  assert.ok(htmlBodyCss.includes('touch-action: none'), 'html, body must set touch-action: none');
+
+  for (const sel of ['#controlsPanel', '#overlay']) {
+    const css = extractBlock(sel);
+    assert.ok(css.includes('touch-action: pan-y'), `${sel} must keep touch-action: pan-y so modals stay scrollable`);
+  }
+
+  for (const sel of ['#touchControls', '#touchJoyBase', '#touchActions', '.touchBtn']) {
+    const css = extractBlock(sel);
+    assert.ok(css.includes('touch-action: none'), `${sel} must set touch-action: none`);
+    assert.ok(css.includes('user-select: none'), `${sel} must set user-select: none`);
+    assert.ok(css.includes('-webkit-touch-callout: none'), `${sel} must set -webkit-touch-callout: none`);
+  }
+});
+
+test('Mobile touch joystick & action buttons prevent zoom, survive 360 turns & multi-touch, and apply console speed curve', () => {
+  const { dbg, doc, win, rafQueue } = loadGameHarness({ hash: '#test' });
+  assert.equal(typeof dbg.evalTouchJoy, 'function', 'game.js must expose evalTouchJoy helper on debugHandle');
+
+  // 1. Verify console-grade joystick speed curve & sprint hysteresis
+  const out = { ox: 0, oy: 0, nx: 0, ny: 0, outMag: 0, rawMag: 0, sprinting: false };
+  const maxR = 50;
+
+  // Deadzone (< 0.12)
+  dbg.evalTouchJoy(0, -5, maxR, false, out);
+  assert.equal(out.outMag, 0, 'rawMag=0.10 must fall in deadzone');
+  assert.equal(out.sprinting, false);
+
+  // Walk zone (0.12 <= rawMag < 0.34 -> 0.38..0.68)
+  dbg.evalTouchJoy(0, -11.5, maxR, false, out); // rawMag = 0.23
+  assert.ok(out.outMag > 0.50 && out.outMag < 0.56, `rawMag=0.23 should output ~0.53 walk speed, got ${out.outMag}`);
+  assert.equal(out.sprinting, false);
+
+  // Full run achieved cleanly by rawMag = 0.56 (comfortable thumb hold!)
+  dbg.evalTouchJoy(0, -28, maxR, false, out); // rawMag = 0.56
+  assert.ok(Math.abs(out.outMag - 1.0) < 1e-6, `rawMag=0.56 must hit full 1.0 run output, got ${out.outMag}`);
+  assert.equal(out.sprinting, false);
+
+  // Sprint hysteresis ring: enter at >= 0.88, stay at >= 0.75, exit < 0.75
+  dbg.evalTouchJoy(0, -44, maxR, false, out); // rawMag = 0.88
+  assert.equal(out.sprinting, true, 'rawMag >= 0.88 must enter sprinting');
+  assert.equal(out.outMag, 1.0);
+  dbg.evalTouchJoy(0, -40, maxR, true, out); // rawMag = 0.80 while already sprinting
+  assert.equal(out.sprinting, true, 'rawMag = 0.80 must hold sprint via hysteresis');
+  dbg.evalTouchJoy(0, -37, maxR, true, out); // rawMag = 0.74
+  assert.equal(out.sprinting, false, 'rawMag < 0.75 must cleanly exit sprint');
+
+  // Sliding past the visual circle clamps knob offset at maxR while holding full sprint!
+  dbg.evalTouchJoy(0, -90, maxR, false, out); // rawMag = 1.80
+  assert.ok(Math.abs(Math.hypot(out.ox, out.oy) - maxR) < 1e-5, 'visual knob must clamp to maxR');
+  assert.equal(out.outMag, 1.0);
+  assert.equal(out.sprinting, true);
+
+  // 2. Non-passive touchstart / window touchmove / touchend + iOS gesture/dblclick zoom guards
+  const joyBase = doc.getElementById('touchJoyBase');
+  const joyKnob = doc.getElementById('touchJoyKnob');
+  const touchControlsEl = doc.getElementById('touchControls');
+  const strikeBtn = doc.getElementById('touchStrike');
+
+  const joyTouchStartListeners = joyBase.getListeners('touchstart');
+  assert.ok(joyTouchStartListeners.length > 0, '#touchJoyBase must register direct touchstart listener');
+  assert.equal(joyTouchStartListeners[0].opts && joyTouchStartListeners[0].opts.passive, false, 'joystick touchstart must be { passive: false }');
+
+  const winTouchMoveListeners = win.getListeners('touchmove');
+  assert.ok(winTouchMoveListeners.some(l => l.opts && l.opts.passive === false), 'window must register { passive: false } touchmove listener for joystick');
+
+  const strikeTouchStartListeners = strikeBtn.getListeners('touchstart');
+  assert.ok(strikeTouchStartListeners.length > 0 && strikeTouchStartListeners[0].opts && strikeTouchStartListeners[0].opts.passive === false, 'touch button must register { passive: false } touchstart listener');
+
+  // iOS gesturestart/gesturechange & dblclick guards
+  let gStartPrevented = false;
+  let gChangePrevented = false;
+  let dblPrevented = false;
+  doc.dispatchEvent({ type: 'gesturestart', preventDefault() { gStartPrevented = true; } });
+  doc.dispatchEvent({ type: 'gesturechange', preventDefault() { gChangePrevented = true; } });
+  strikeBtn.dispatchEvent({ type: 'dblclick', preventDefault() { dblPrevented = true; }, stopPropagation() {} });
+  assert.equal(gStartPrevented, true, 'gesturestart must call preventDefault');
+  assert.equal(gChangePrevented, true, 'gesturechange must call preventDefault');
+  assert.equal(dblPrevented, true, 'touch button dblclick must call preventDefault');
+
+  let tcDblPrevented = false;
+  touchControlsEl.dispatchEvent({ type: 'dblclick', preventDefault() { tcDblPrevented = true; }, stopPropagation() {} });
+  assert.equal(tcDblPrevented, true, '#touchControls dblclick must call preventDefault');
+
+  // Start joystick touch (center of rect {left:20, top:400, width:120, height:120} is (80, 460), joyMaxR = 50.4)
+  let joyStartPrevented = false;
+  joyBase.dispatchEvent({
+    type: 'touchstart',
+    touches: [{ identifier: 10, clientX: 80, clientY: 460 }],
+    changedTouches: [{ identifier: 10, clientX: 80, clientY: 460 }],
+    preventDefault() { joyStartPrevented = true; },
+    stopPropagation() {},
+  });
+  assert.equal(joyStartPrevented, true);
+  assert.equal(joyBase.classList.contains('active'), true);
+
+  // Move joystick to comfortable run ring (clientY: 432 -> dy=-28, rawMag=0.556 -> full 1.0 run, sprinting=false)
+  let now = 2000;
+  win.dispatchEvent({
+    type: 'touchmove',
+    touches: [{ identifier: 10, clientX: 80, clientY: 432 }],
+    changedTouches: [{ identifier: 10, clientX: 80, clientY: 432 }],
+    preventDefault() {},
+  });
+  for (let i = 0; i < 6; i++) {
+    now += 35;
+    rafQueue[rafQueue.length - 1](now);
+  }
+  assert.equal(dbg.P.sprinting, false, 'Comfortable run hold (~56%) must run at full speed without sprinting');
+  assert.ok(dbg.P.vz > 5.0, `Comfortable run hold must achieve full desktop run speed, got vz=${dbg.P.vz}`);
+
+  // While holding joystick (id=10), rapid double-tap Strike (id=11 then id=12) advances combo without zooming or dropping joystick!
+  dbg.glooms.length = 0;
+  let tap1Prevented = false;
+  let tap2Prevented = false;
+  strikeBtn.dispatchEvent({
+    type: 'touchstart',
+    touches: [
+      { identifier: 10, clientX: 80, clientY: 432 },
+      { identifier: 11, clientX: 900, clientY: 500 },
+    ],
+    changedTouches: [{ identifier: 11, clientX: 900, clientY: 500 }],
+    preventDefault() { tap1Prevented = true; },
+    stopPropagation() {},
+  });
+  assert.equal(tap1Prevented, true);
+  assert.equal(dbg.P.meleeStep, 1, 'First Strike tap must start combo step 1');
+  strikeBtn.dispatchEvent({
+    type: 'touchend',
+    touches: [{ identifier: 10, clientX: 80, clientY: 432 }],
+    changedTouches: [{ identifier: 11, clientX: 900, clientY: 500 }],
+    preventDefault() {},
+  });
+  // Unrelated touchend must NOT drop joystick!
+  win.dispatchEvent({
+    type: 'touchend',
+    touches: [{ identifier: 10, clientX: 80, clientY: 432 }],
+    changedTouches: [{ identifier: 11, clientX: 900, clientY: 500 }],
+  });
+  assert.equal(joyBase.classList.contains('active'), true, 'Releasing Strike button must NOT release held joystick');
+
+  dbg.P.meleeT = 0;
+  dbg.P.comboWindowT = 0.4;
+  strikeBtn.dispatchEvent({
+    type: 'touchstart',
+    touches: [
+      { identifier: 10, clientX: 80, clientY: 432 },
+      { identifier: 12, clientX: 900, clientY: 500 },
+    ],
+    changedTouches: [{ identifier: 12, clientX: 900, clientY: 500 }],
+    preventDefault() { tap2Prevented = true; },
+    stopPropagation() {},
+  });
+  assert.equal(tap2Prevented, true);
+  assert.equal(dbg.P.meleeStep, 2, 'Rapid second Strike tap must chain into combo step 2');
+  strikeBtn.dispatchEvent({
+    type: 'touchend',
+    touches: [{ identifier: 10, clientX: 80, clientY: 432 }],
+    changedTouches: [{ identifier: 12, clientX: 900, clientY: 500 }],
+    preventDefault() {},
+  });
+
+  // Slide well outside the 120px circle (80px above center) on window touchmove -> sprints forward
+  let joyMovePrevented = false;
+  win.dispatchEvent({
+    type: 'touchmove',
+    touches: [{ identifier: 10, clientX: 80, clientY: 380 }],
+    changedTouches: [{ identifier: 10, clientX: 80, clientY: 380 }],
+    preventDefault() { joyMovePrevented = true; },
+  });
+  assert.equal(joyMovePrevented, true, 'joystick window touchmove must call preventDefault');
+  for (let i = 0; i < 24; i++) {
+    now += 35;
+    rafQueue[rafQueue.length - 1](now);
+  }
+  assert.equal(dbg.P.sprinting, true, 'Thumb pushed outside joystick ring must engage sprint');
+  assert.ok(dbg.P.vz > 7.5, `Forward sprint must move player along +Z, got vz=${dbg.P.vz}`);
+
+  // 360 degree turning while holding joystick outside visual ring (right -> down -> left)
+  const sweepPoints = [
+    { x: 160, y: 460, expectVxNeg: true },  // +X stick (right) -> -X world (facing +Z, right is -X)
+    { x: 80,  y: 540, expectVzNeg: true },  // +Y stick (down)  -> -Z world
+    { x: 0,   y: 460, expectVxPos: true },  // -X stick (left)  -> +X world
+  ];
+  for (const pt of sweepPoints) {
+    win.dispatchEvent({
+      type: 'touchmove',
+      touches: [{ identifier: 10, clientX: pt.x, clientY: pt.y }],
+      changedTouches: [{ identifier: 10, clientX: pt.x, clientY: pt.y }],
+      preventDefault() {},
+    });
+    for (let i = 0; i < 10; i++) {
+      now += 35;
+      rafQueue[rafQueue.length - 1](now);
+    }
+    assert.equal(dbg.P.sprinting, true, '360 sweep outside ring must stay sprinting without dropping');
+    if (pt.expectVxNeg) assert.ok(dbg.P.vx < -5, `Expected -X velocity on right stick, got vx=${dbg.P.vx}`);
+    if (pt.expectVzNeg) assert.ok(dbg.P.vz < -5, `Expected -Z velocity on down stick, got vz=${dbg.P.vz}`);
+    if (pt.expectVxPos) assert.ok(dbg.P.vx > 5, `Expected +X velocity on left stick, got vx=${dbg.P.vx}`);
+  }
+
+  // Release joystick finger id=10 -> resets cleanly
+  win.dispatchEvent({
+    type: 'touchend',
+    touches: [],
+    changedTouches: [{ identifier: 10, clientX: 0, clientY: 460 }],
+  });
+  assert.equal(joyBase.classList.contains('active'), false);
+  assert.equal(joyKnob.style.transform, 'translate3d(0px, 0px, 0)');
+
+  // Pointer events with pointerType === 'touch' must be ignored so they never conflict with touch* handlers
+  joyBase.dispatchEvent({
+    type: 'pointerdown',
+    pointerType: 'touch',
+    pointerId: 55,
+    clientX: 80,
+    clientY: 380,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(joyBase.classList.contains('active'), false, 'pointerdown with pointerType==="touch" must be ignored');
+
+  // Desktop mouse pointerdown still works for non-touch testing!
+  joyBase.dispatchEvent({
+    type: 'pointerdown',
+    pointerType: 'mouse',
+    pointerId: 1,
+    clientX: 80,
+    clientY: 380,
+    preventDefault() {},
+    stopPropagation() {},
+  });
+  assert.equal(joyBase.classList.contains('active'), true, 'pointerdown with pointerType==="mouse" must still work');
+  win.dispatchEvent({ type: 'pointerup', pointerType: 'mouse', pointerId: 1 });
+  assert.equal(joyBase.classList.contains('active'), false);
+});
+
+test('Natural offscreen creature spawning keeps enemies & wild critters out of front camera cone when started', () => {
+  const { dbg } = loadGameHarness({ hash: '#test' });
+  const gameSrc = fs.readFileSync(new URL('../game.js', import.meta.url), 'utf8');
+  assert.ok(!gameSrc.slice(gameSrc.indexOf('function offscreenLandSpot')).includes('new THREE.Vector3'),
+    'offscreenLandSpot must reuse module-scope _camFwd without new THREE.Vector3');
+
+  // Orient camera looking straight along +Z
+  dbg.P.x = 0;
+  dbg.P.z = 0;
+  dbg.P.facing = 0;
+  dbg.camera.getWorldDirection = (out) => out.set(0, -0.2, 0.98).normalize();
+
+  // 1. spawnGloom spawns offscreen [22..46] (or farFrontR >= 54) and biases g.dir within +-55 deg toward player
+  dbg.glooms.length = 0;
+  for (let i = 0; i < 20; i++) {
+    const g = dbg.spawnGloom('classic');
+    assert.ok(g, 'spawnGloom must return spawned gloom');
+    const dx = g.mesh.position.x - dbg.P.x;
+    const dz = g.mesh.position.z - dbg.P.z;
+    const dist = Math.hypot(dx, dz);
+    assert.ok(dist >= 22, `Started spawnGloom must spawn >= 22u away, got ${dist}`);
+    const dot = (dx / dist) * 0 + (dz / dist) * 1;
+    if (dist < 54) {
+      assert.ok(dot <= 0.30 + 1e-6, `spawnGloom within fog radius (${dist}) must stay out of front FOV cone (dot=${dot})`);
+    }
+    const toPlayerYaw = Math.atan2(dbg.P.x - g.mesh.position.x, dbg.P.z - g.mesh.position.z);
+    const diff = dbg.Physics.wrapAngle(g.dir - toPlayerYaw);
+    assert.ok(Math.abs(diff) <= (55 * Math.PI) / 180 + 1e-5, `spawnGloom initial dir must bias within +-55deg toward player, got ${(diff * 180 / Math.PI).toFixed(1)}deg`);
+  }
+
+  // 2. spawnWild when started=true spawns offscreen [20..46] (or farFrontR >= 50)
+  dbg.wild.length = 0;
+  for (let i = 0; i < 20; i++) {
+    dbg.spawnWild();
+  }
+  assert.equal(dbg.wild.length, 20, 'spawnWild must spawn 20 wild critters');
+  for (const w of dbg.wild) {
+    const dx = w.mesh.position.x - dbg.P.x;
+    const dz = w.mesh.position.z - dbg.P.z;
+    const dist = Math.hypot(dx, dz);
+    assert.ok(dist >= 20, `Started spawnWild must spawn >= 20u away, got ${dist}`);
+    const dot = (dx / dist) * 0 + (dz / dist) * 1;
+    if (dist < 50) {
+      assert.ok(dot <= 0.30 + 1e-6, `spawnWild within fog radius (${dist}) must stay out of front FOV cone (dot=${dot})`);
+    }
+  }
+
+  // 3. respawnPlayer uses updated concentric ring spacing (rad = 2.65 + ring * 1.95)
+  dbg.followers.length = 0;
+  for (let i = 0; i < 7; i++) dbg.addFollower(1, dbg.P.y, 1, null, dbg.LAND[0]);
+  dbg.respawnPlayer();
+  const ring0Dist = Math.hypot(dbg.followers[0].mesh.position.x - dbg.P.x, dbg.followers[0].mesh.position.z - dbg.P.z);
+  const ring1Dist = Math.hypot(dbg.followers[6].mesh.position.x - dbg.P.x, dbg.followers[6].mesh.position.z - dbg.P.z);
+  assert.ok(Math.abs(ring0Dist - 2.65) < 0.05, `respawnPlayer ring 0 radius must be 2.65, got ${ring0Dist}`);
+  assert.ok(Math.abs(ring1Dist - 4.60) < 0.05, `respawnPlayer ring 1 radius must be 4.60 (2.65+1.95), got ${ring1Dist}`);
+
+  // 4. Pre-start (!started) spawnWild keeps landSpot(P.x, P.z, 10, 40, 0.6) so opening vista is populated
+  const pre = loadGameHarness({ hash: '' });
+  pre.dbg.wild.length = 0;
+  pre.dbg.spawnWild();
+  assert.equal(pre.dbg.wild.length, 1);
+  const preDist = Math.hypot(pre.dbg.wild[0].mesh.position.x - pre.dbg.P.x, pre.dbg.wild[0].mesh.position.z - pre.dbg.P.z);
+  assert.ok(preDist >= 10 && preDist <= 40, `Pre-start spawnWild must use [10..40] opening ring, got ${preDist}`);
+});
+

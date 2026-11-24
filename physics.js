@@ -138,7 +138,11 @@ const Physics = (() => {
   let touchMoveZ = 0;
   let touchSprint = false;
   let touchJumpHeld = false;
-  const touchCam = { id: -1, lastX: 0, lastY: 0, pinchDist: 0 };
+  const canvasTouches = [
+    { id: null, x: 0, y: 0 },
+    { id: null, x: 0, y: 0 },
+  ];
+  const touchCam = { pinchDist: 0 };
 
   const PREVENT_KEYS = {
     KeyW: true,
@@ -1009,63 +1013,126 @@ const Physics = (() => {
     orbitCamera(dx, dy);
   }
 
-  function onTouchStart(e) {
-    if (!isStarted() || !e.touches) return;
-    if (boundDom && e.target && e.target !== boundDom) return;
-    if (e.touches.length === 2) {
-      const a = e.touches[0];
-      const b = e.touches[1];
-      touchCam.pinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      touchCam.id = -1;
-      if (typeof e.preventDefault === 'function') e.preventDefault();
-      return;
+  function findTouchInList(list, id) {
+    if (!list || id === null) return null;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].identifier === id) return list[i];
     }
-    if (touchCam.id < 0 && e.changedTouches && e.changedTouches.length > 0) {
-      const t = e.changedTouches[0];
-      touchCam.id = t.identifier;
-      touchCam.lastX = t.clientX;
-      touchCam.lastY = t.clientY;
-      if (typeof e.preventDefault === 'function') e.preventDefault();
+    return null;
+  }
+
+  function compactCanvasTouches() {
+    if (canvasTouches[0].id === null && canvasTouches[1].id !== null) {
+      canvasTouches[0].id = canvasTouches[1].id;
+      canvasTouches[0].x = canvasTouches[1].x;
+      canvasTouches[0].y = canvasTouches[1].y;
+      canvasTouches[1].id = null;
     }
   }
 
+  function resetCanvasTouches() {
+    canvasTouches[0].id = null;
+    canvasTouches[1].id = null;
+    touchCam.pinchDist = 0;
+  }
+
+  function onTouchStart(e) {
+    if (!isStarted() || !e) return;
+    if (boundDom && e.target && e.target !== boundDom) return;
+    if (e.touches) {
+      if (canvasTouches[0].id !== null && !findTouchInList(e.touches, canvasTouches[0].id)) {
+        canvasTouches[0].id = null;
+      }
+      if (canvasTouches[1].id !== null && !findTouchInList(e.touches, canvasTouches[1].id)) {
+        canvasTouches[1].id = null;
+      }
+      compactCanvasTouches();
+    }
+    const list = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches : e.touches;
+    if (!list || list.length === 0) return;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      if (t.identifier === canvasTouches[0].id) {
+        canvasTouches[0].x = t.clientX;
+        canvasTouches[0].y = t.clientY;
+      } else if (t.identifier === canvasTouches[1].id) {
+        canvasTouches[1].x = t.clientX;
+        canvasTouches[1].y = t.clientY;
+      } else if (canvasTouches[0].id === null) {
+        canvasTouches[0].id = t.identifier;
+        canvasTouches[0].x = t.clientX;
+        canvasTouches[0].y = t.clientY;
+      } else if (canvasTouches[1].id === null) {
+        canvasTouches[1].id = t.identifier;
+        canvasTouches[1].x = t.clientX;
+        canvasTouches[1].y = t.clientY;
+      }
+    }
+    if (canvasTouches[0].id !== null && canvasTouches[1].id !== null) {
+      touchCam.pinchDist = Math.hypot(
+        canvasTouches[0].x - canvasTouches[1].x,
+        canvasTouches[0].y - canvasTouches[1].y
+      );
+    } else {
+      touchCam.pinchDist = 0;
+    }
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+  }
+
   function onTouchMove(e) {
-    if (!isStarted() || !e.touches) return;
-    if (e.touches.length === 2 && touchCam.pinchDist > 0) {
-      const a = e.touches[0];
-      const b = e.touches[1];
-      const nextDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      const delta = touchCam.pinchDist - nextDist;
-      camDist = clamp(camDist + delta * 0.035, 4.5, 18);
+    if (!isStarted() || !e || !e.touches) return;
+    const t0 = findTouchInList(e.touches, canvasTouches[0].id);
+    const t1 = findTouchInList(e.touches, canvasTouches[1].id);
+    if (t0 && t1) {
+      canvasTouches[0].x = t0.clientX;
+      canvasTouches[0].y = t0.clientY;
+      canvasTouches[1].x = t1.clientX;
+      canvasTouches[1].y = t1.clientY;
+      const nextDist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      if (touchCam.pinchDist > 0) {
+        const delta = touchCam.pinchDist - nextDist;
+        camDist = clamp(camDist + delta * 0.035, 4.5, 18);
+      }
       touchCam.pinchDist = nextDist;
       if (typeof e.preventDefault === 'function') e.preventDefault();
       return;
     }
-    if (touchCam.id < 0) return;
-    for (let i = 0; i < e.touches.length; i++) {
-      const t = e.touches[i];
-      if (t.identifier === touchCam.id) {
-        const dx = t.clientX - touchCam.lastX;
-        const dy = t.clientY - touchCam.lastY;
-        touchCam.lastX = t.clientX;
-        touchCam.lastY = t.clientY;
-        orbitCamera(dx * 1.35, dy * 1.35);
-        if (typeof e.preventDefault === 'function') e.preventDefault();
-        break;
-      }
+    const slot = t0 ? canvasTouches[0] : (t1 ? canvasTouches[1] : null);
+    const t = t0 || t1;
+    if (!slot || !t) return;
+    touchCam.pinchDist = 0;
+    const dx = t.clientX - slot.x;
+    const dy = t.clientY - slot.y;
+    slot.x = t.clientX;
+    slot.y = t.clientY;
+    if (dx !== 0 || dy !== 0) {
+      orbitCamera(dx * 1.35, dy * 1.35);
     }
+    if (typeof e.preventDefault === 'function') e.preventDefault();
   }
 
   function onTouchEnd(e) {
-    if (e && e.touches && e.touches.length < 2) {
-      touchCam.pinchDist = 0;
+    if (!e) {
+      resetCanvasTouches();
+      return;
     }
-    if (touchCam.id < 0 || !e || !e.changedTouches) return;
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      if (e.changedTouches[i].identifier === touchCam.id) {
-        touchCam.id = -1;
-        break;
+    if (e.changedTouches) {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const id = e.changedTouches[i].identifier;
+        if (canvasTouches[0].id === id) canvasTouches[0].id = null;
+        if (canvasTouches[1].id === id) canvasTouches[1].id = null;
       }
+    } else if (e.touches) {
+      if (canvasTouches[0].id !== null && !findTouchInList(e.touches, canvasTouches[0].id)) {
+        canvasTouches[0].id = null;
+      }
+      if (canvasTouches[1].id !== null && !findTouchInList(e.touches, canvasTouches[1].id)) {
+        canvasTouches[1].id = null;
+      }
+    }
+    compactCanvasTouches();
+    if (canvasTouches[0].id === null || canvasTouches[1].id === null) {
+      touchCam.pinchDist = 0;
     }
   }
 
@@ -1096,8 +1163,7 @@ const Physics = (() => {
     touchMoveZ = 0;
     touchSprint = false;
     touchJumpHeld = false;
-    touchCam.id = -1;
-    touchCam.pinchDist = 0;
+    resetCanvasTouches();
   }
 
   function init(domElement, cb) {
@@ -1105,8 +1171,7 @@ const Physics = (() => {
     mouse.down = false;
     mouse.button = -1;
     mouse.moved = 0;
-    touchCam.id = -1;
-    touchCam.pinchDist = 0;
+    resetCanvasTouches();
 
     if (boundDom && boundDom !== domElement && typeof boundDom.removeEventListener === 'function') {
       boundDom.removeEventListener('mousedown', onMouseDown);
@@ -2679,6 +2744,7 @@ const Physics = (() => {
     set firstPerson(v) { firstPerson = !!v; },
     get camYaw() { return camYaw; },
     get camPitch() { return camPitch; },
+    get camDist() { return camDist; },
     init,
     setTouchMove,
     setTouchJump,

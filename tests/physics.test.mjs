@@ -1647,4 +1647,161 @@ test('addCameraShake triggers brief inward camKick punch on heavy impacts that d
   assert.ok(Ph.getCameraKick() < 0.02, `camKick must decay smoothly back to ~0 within ~0.4s, got ${Ph.getCameraKick()}`);
 });
 
+test('Isolated canvas touch IDs keep camera orbit smooth during joystick + button touches and allow 2-finger canvas pinch', () => {
+  const Vec3 = makeVec3Class();
+  const Ph = loadPhysics({
+    THREE: {
+      Vector3: Vec3,
+      MathUtils: {
+        clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
+        smoothstep: (x, a, b) => {
+          const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+          return t * t * (3 - 2 * t);
+        },
+      },
+    },
+    WATER_Y: -10,
+    Sound: { step: () => {}, land: () => {}, splash: () => {}, roll: () => {}, jump: () => {}, lockOn: () => {} },
+    heightAt: () => 0,
+    terrainNormalAt: (x, z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; },
+    surfaceAt: () => 'grass',
+    getNearbyColliders: (x, z, r, out) => { out.length = 0; return out; },
+    camera: makeMockCamera(Vec3),
+  });
+
+  const listeners = {};
+  const domEl = {
+    addEventListener(ev, fn) { (listeners[ev] ||= []).push(fn); },
+    removeEventListener() {},
+  };
+  const joyEl = { tagName: 'DIV' };
+  const btnEl = { tagName: 'BUTTON' };
+
+  Ph.init(domEl, { isStarted: () => true });
+  assert.equal(typeof Ph.camDist, 'number', 'Physics must expose camDist getter');
+
+  const emit = (ev, payload) => {
+    for (const fn of (listeners[ev] || [])) fn(payload);
+  };
+
+  const yaw0 = Ph.camYaw;
+  const dist0 = Ph.camDist;
+
+  // 1. Joystick finger (id=0) on non-canvas element is ignored by canvas touch handler
+  emit('touchstart', {
+    target: joyEl,
+    touches: [{ identifier: 0, clientX: 80, clientY: 460 }],
+    changedTouches: [{ identifier: 0, clientX: 80, clientY: 460 }],
+    preventDefault() {},
+  });
+
+  // 2. Canvas camera finger (id=1) starts while joystick finger (id=0) is held -> e.touches.length === 2!
+  // Must track ONLY canvas finger id=1 and NOT falsely trigger pinch zoom!
+  let camStartPrevented = false;
+  emit('touchstart', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 80, clientY: 460 },
+      { identifier: 1, clientX: 500, clientY: 300 },
+    ],
+    changedTouches: [{ identifier: 1, clientX: 500, clientY: 300 }],
+    preventDefault() { camStartPrevented = true; },
+  });
+  assert.equal(camStartPrevented, true, 'Canvas touchstart must call preventDefault');
+
+  // Move both joystick finger (id=0) and canvas finger (id=1) -> must orbit camYaw, NOT zoom camDist!
+  emit('touchmove', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 580, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 1, clientX: 580, clientY: 280 }],
+    preventDefault() {},
+  });
+  assert.equal(Ph.camDist, dist0, 'Joystick + 1 canvas finger must NEVER falsely trigger pinch zoom');
+  assert.ok(Ph.camYaw < yaw0 - 0.3, `1 canvas finger while holding joystick must orbit camYaw, got ${yaw0} -> ${Ph.camYaw}`);
+
+  // 3. Third finger (id=2) taps Strike button and lifts -> canvas finger id=1 continues orbiting unaffected!
+  emit('touchstart', {
+    target: btnEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 580, clientY: 280 },
+      { identifier: 2, clientX: 900, clientY: 500 },
+    ],
+    changedTouches: [{ identifier: 2, clientX: 900, clientY: 500 }],
+    preventDefault() {},
+  });
+  emit('touchend', {
+    target: btnEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 580, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 2, clientX: 900, clientY: 500 }],
+  });
+  const yawAfterBtn = Ph.camYaw;
+  emit('touchmove', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 640, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 1, clientX: 640, clientY: 280 }],
+    preventDefault() {},
+  });
+  assert.ok(Ph.camYaw < yawAfterBtn - 0.2, 'Canvas orbit must continue seamlessly when button touch starts/ends');
+
+  // 4. Two fingers BOTH on canvas (id=1 and id=3) while joystick (id=0) is STILL held (total 3 touches) -> pinch-zooms cleanly!
+  emit('touchstart', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 640, clientY: 280 },
+      { identifier: 3, clientX: 740, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 3, clientX: 740, clientY: 280 }],
+    preventDefault() {},
+  });
+  emit('touchmove', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 1, clientX: 590, clientY: 280 },
+      { identifier: 3, clientX: 790, clientY: 280 },
+    ],
+    changedTouches: [
+      { identifier: 1, clientX: 590, clientY: 280 },
+      { identifier: 3, clientX: 790, clientY: 280 },
+    ],
+    preventDefault() {},
+  });
+  assert.ok(Ph.camDist < dist0 - 2.0, `Two canvas fingers spreading apart while holding joystick must pinch zoom in, got ${dist0} -> ${Ph.camDist}`);
+
+  // 5. Lift one canvas finger (id=1) -> remaining canvas finger (id=3) transitions seamlessly back to 1-finger orbit without snapping
+  emit('touchend', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 3, clientX: 790, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 1, clientX: 590, clientY: 280 }],
+  });
+  const yawBeforeRemain = Ph.camYaw;
+  const distAfterPinch = Ph.camDist;
+  emit('touchmove', {
+    target: domEl,
+    touches: [
+      { identifier: 0, clientX: 120, clientY: 420 },
+      { identifier: 3, clientX: 850, clientY: 280 },
+    ],
+    changedTouches: [{ identifier: 3, clientX: 850, clientY: 280 }],
+    preventDefault() {},
+  });
+  assert.equal(Ph.camDist, distAfterPinch, 'Single remaining canvas finger must stop pinching');
+  assert.ok(Ph.camYaw < yawBeforeRemain - 0.2, 'Single remaining canvas finger must seamlessly resume 1-finger orbit');
+});
+
+
 

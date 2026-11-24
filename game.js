@@ -59,11 +59,14 @@ function pickUniqueCritterName(sp) {
 }
 
 let unlockedLand = 3; // grows as totems are lit
+let started = false;
 
 const P = Physics.P;
 const AIR_MAX = Physics.AIR_MAX;
 
 // Module-scope reusable scratch objects & buffers (zero GC in hot loops)
+const _camFwd = new THREE.Vector3();
+const _joyOut = { ox: 0, oy: 0, nx: 0, ny: 0, outMag: 0, rawMag: 0, sprinting: false };
 const _wishTargetVec = new THREE.Vector3();
 const _playerPickupVec = new THREE.Vector3();
 const _allyPickupVec = new THREE.Vector3();
@@ -1769,7 +1772,7 @@ function respawnPlayer() {
       ringCap = 6 + ring * 4;
     }
     const ang = (idxInRing / Math.max(1, ringCap)) * Math.PI * 2 + 0.5 + ring * 0.35;
-    const rad = 2.4 + ring * 1.75;
+    const rad = 2.65 + ring * 1.95;
     const fx = P.x + Math.cos(ang) * rad;
     const fz = P.z + Math.sin(ang) * rad;
     const fy = Math.max(heightAt(fx, fz), WATER_Y);
@@ -1985,8 +1988,44 @@ function gloomTargetCount() {
   return Math.min(6, 1 + Math.floor(dist / 70));
 }
 
+function offscreenLandSpot(cx, cz, minR, maxR, minH = 0.4, farFrontR = 0) {
+  let fwdX = Math.sin(P.facing);
+  let fwdZ = Math.cos(P.facing);
+  if (typeof camera !== 'undefined' && camera && typeof camera.getWorldDirection === 'function') {
+    camera.getWorldDirection(_camFwd);
+    const len = Math.hypot(_camFwd.x, _camFwd.z);
+    if (len > 0.001) {
+      fwdX = _camFwd.x / len;
+      fwdZ = _camFwd.z / len;
+    }
+  }
+
+  for (let i = 0; i < 36; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = minR + Math.random() * (maxR - minR);
+    const ux = Math.cos(a);
+    const uz = Math.sin(a);
+    const dot = ux * fwdX + uz * fwdZ;
+    if (dot > 0.30 && !(farFrontR > 0 && d >= farFrontR)) continue;
+    const x = cx + ux * d;
+    const z = cz + uz * d;
+    const h = heightAt(x, z);
+    if (h > minH && h < 30) {
+      return { x, z, h };
+    }
+  }
+
+  if (farFrontR > 0) {
+    const farSpot = landSpot(cx, cz, farFrontR, farFrontR + 18, minH);
+    if (farSpot) return farSpot;
+  }
+  return landSpot(cx, cz, minR, maxR, minH);
+}
+
 function spawnGloom(tierOverride) {
-  const spot = landSpot(P.x, P.z, 12, 34, 0.4);
+  const spot = started
+    ? offscreenLandSpot(P.x, P.z, 22, 46, 0.4, 54)
+    : landSpot(P.x, P.z, 12, 34, 0.4);
   if (!spot) return null;
 
   let tierDef = null;
@@ -2045,6 +2084,11 @@ function spawnGloom(tierOverride) {
     };
     g.lockCand = { kind: 'gloom', ref: g, mesh, yOffset: 0.65 };
     g.lookCand = { mesh, maxDist: 14, yOffset: 0.65 };
+  }
+  if (started) {
+    const towardPlayer = Math.atan2(P.x - spot.x, P.z - spot.z);
+    g.dir = towardPlayer + (Math.random() * 2 - 1) * ((55 * Math.PI) / 180);
+    if (mesh.rotation) mesh.rotation.y = g.dir;
   }
   glooms.push(g);
   return g;
@@ -2912,7 +2956,9 @@ function damageCompanion(ally, amount = 1, kx = 0, kz = 0, attacker = null) {
 }
 
 function spawnWild() {
-  const spot = landSpot(P.x, P.z, 10, 40, 0.6);
+  const spot = started
+    ? offscreenLandSpot(P.x, P.z, 20, 46, 0.6, 50)
+    : landSpot(P.x, P.z, 10, 40, 0.6);
   if (!spot) return;
   const pool = LAND.slice(0, unlockedLand);
   const baseSp = pool[Math.floor(Math.random() * pool.length)];
@@ -3842,43 +3888,115 @@ if (touchToggleBtn) {
   });
 }
 
-if (typeof addEventListener === 'function') {
+const winTarget = (typeof window !== 'undefined' && typeof window.addEventListener === 'function')
+  ? window
+  : (typeof addEventListener === 'function' ? globalThis : null);
+
+const preventDefaultEvent = e => {
+  if (e && typeof e.preventDefault === 'function') e.preventDefault();
+};
+
+// iOS Safari pinch-zoom & gesture guards
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('gesturestart', preventDefaultEvent, { passive: false });
+  document.addEventListener('gesturechange', preventDefaultEvent, { passive: false });
+}
+if (winTarget && typeof winTarget.addEventListener === 'function') {
+  winTarget.addEventListener('gesturestart', preventDefaultEvent, { passive: false });
+  winTarget.addEventListener('gesturechange', preventDefaultEvent, { passive: false });
   const enableOnFirstTouch = () => {
     setTouchUIEnabled(true);
-    if (typeof removeEventListener === 'function') removeEventListener('touchstart', enableOnFirstTouch);
+    if (typeof winTarget.removeEventListener === 'function') {
+      winTarget.removeEventListener('touchstart', enableOnFirstTouch);
+    }
   };
-  addEventListener('touchstart', enableOnFirstTouch, { passive: true });
+  winTarget.addEventListener('touchstart', enableOnFirstTouch, { passive: true });
+}
+
+const touchControlsEl = document.getElementById('touchControls');
+if (touchControlsEl && typeof touchControlsEl.addEventListener === 'function') {
+  touchControlsEl.addEventListener('dblclick', e => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  });
+}
+
+function findTouchById(list, id) {
+  if (!list || id === null) return null;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].identifier === id) return list[i];
+  }
+  return null;
+}
+
+/**
+ * Evaluate console-grade virtual joystick deflection with deadzone, crisp full-run plateau,
+ * visual knob clamping, and sprint-ring hysteresis. Reuses `out` for zero GC.
+ */
+function evalTouchJoy(dx, dy, maxR, wasSprinting, out = _joyOut) {
+  const r = Math.max(1, maxR || 44);
+  const dist = Math.hypot(dx, dy);
+  const clamped = Math.min(dist, r);
+  const inv = dist > 0.001 ? clamped / dist : 0;
+  out.ox = dx * inv;
+  out.oy = dy * inv;
+  const rawMag = dist / r;
+  out.rawMag = rawMag;
+
+  let outMag = 0;
+  let sprinting = false;
+  if (rawMag < 0.12) {
+    outMag = 0;
+    sprinting = false;
+  } else if (rawMag < 0.34) {
+    outMag = 0.38 + ((rawMag - 0.12) / 0.22) * 0.30;
+    sprinting = false;
+  } else if (rawMag < 0.86) {
+    outMag = 0.68 + Math.min(1, (rawMag - 0.34) / 0.22) * 0.32;
+    sprinting = wasSprinting ? rawMag >= 0.75 : false;
+  } else {
+    outMag = 1.0;
+    sprinting = wasSprinting ? rawMag >= 0.75 : rawMag >= 0.88;
+  }
+
+  if (outMag > 0 && dist > 0.001) {
+    out.nx = (dx / dist) * outMag;
+    out.ny = (dy / dist) * outMag;
+  } else {
+    out.nx = 0;
+    out.ny = 0;
+  }
+  out.outMag = outMag;
+  out.sprinting = sprinting;
+  return out;
 }
 
 const touchJoyBase = document.getElementById('touchJoyBase');
 const touchJoyKnob = document.getElementById('touchJoyKnob');
 if (touchJoyBase && touchJoyKnob && typeof touchJoyBase.addEventListener === 'function') {
-  let joyPid = -1;
+  let joyTouchId = null;
+  let joyPid = null;
   let joyCx = 0;
   let joyCy = 0;
-  let joyMaxR = 44;
+  let joyMaxR = 50;
+  let joySprinting = false;
+  let lastJoyTouchEv = null;
+  let lastJoyPtrEv = null;
 
   const updateJoyFromPoint = (clientX, clientY) => {
-    const dx = clientX - joyCx;
-    const dy = clientY - joyCy;
-    const dist = Math.hypot(dx, dy);
-    const clamped = Math.min(dist, joyMaxR);
-    const inv = dist > 0.001 ? clamped / dist : 0;
-    const ox = dx * inv;
-    const oy = dy * inv;
-    touchJoyKnob.style.transform = `translate3d(${ox.toFixed(1)}px, ${oy.toFixed(1)}px, 0)`;
-    const nx = ox / joyMaxR;
-    const ny = oy / joyMaxR;
-    const mag = Math.hypot(nx, ny);
-    const sprinting = mag > 0.84;
-    if (touchJoyBase.classList) touchJoyBase.classList.toggle('sprinting', sprinting);
+    const res = evalTouchJoy(clientX - joyCx, clientY - joyCy, joyMaxR, joySprinting, _joyOut);
+    joySprinting = res.sprinting;
+    touchJoyKnob.style.transform = `translate3d(${res.ox.toFixed(1)}px, ${res.oy.toFixed(1)}px, 0)`;
+    if (touchJoyBase.classList) touchJoyBase.classList.toggle('sprinting', joySprinting);
     if (typeof Physics.setTouchMove === 'function') {
-      Physics.setTouchMove(mag < 0.1 ? 0 : nx, mag < 0.1 ? 0 : ny, sprinting);
+      Physics.setTouchMove(res.nx, res.ny, joySprinting);
     }
   };
 
   const resetJoy = () => {
-    joyPid = -1;
+    joyTouchId = null;
+    joyPid = null;
+    joySprinting = false;
     touchJoyKnob.style.transform = 'translate3d(0px, 0px, 0)';
     if (touchJoyBase.classList) {
       touchJoyBase.classList.remove('active');
@@ -3887,60 +4005,179 @@ if (touchJoyBase && touchJoyKnob && typeof touchJoyBase.addEventListener === 'fu
     if (typeof Physics.setTouchMove === 'function') Physics.setTouchMove(0, 0, false);
   };
 
-  touchJoyBase.addEventListener('pointerdown', e => {
+  const measureJoyRect = () => {
+    const rect = typeof touchJoyBase.getBoundingClientRect === 'function'
+      ? touchJoyBase.getBoundingClientRect()
+      : { left: 0, top: 0, width: 120, height: 120 };
+    const rectW = rect && rect.width > 0 ? rect.width : 120;
+    const rectH = rect && rect.height > 0 ? rect.height : rectW;
+    joyCx = (rect ? rect.left : 0) + rectW * 0.5;
+    joyCy = (rect ? rect.top : 0) + rectH * 0.5;
+    joyMaxR = Math.max(36, rectW * 0.42);
+  };
+
+  const onJoyTouchMove = e => {
+    if (!e || e === lastJoyTouchEv) return;
+    if (joyTouchId === null) return;
+    const t = findTouchById(e.touches, joyTouchId) || findTouchById(e.changedTouches, joyTouchId);
+    if (!t) return;
+    lastJoyTouchEv = e;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    updateJoyFromPoint(t.clientX, t.clientY);
+  };
+
+  const onJoyTouchEnd = e => {
+    if (e && e === lastJoyTouchEv) return;
+    if (joyTouchId === null) return;
+    if (e && e.changedTouches) {
+      if (!findTouchById(e.changedTouches, joyTouchId)) return;
+    } else if (e && e.touches && findTouchById(e.touches, joyTouchId)) {
+      return;
+    }
+    lastJoyTouchEv = e || null;
+    resetJoy();
+  };
+
+  touchJoyBase.addEventListener('touchstart', e => {
     if (!started) return;
     if (typeof e.preventDefault === 'function') e.preventDefault();
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
-    const rect = touchJoyBase.getBoundingClientRect();
-    joyCx = rect.left + rect.width * 0.5;
-    joyCy = rect.top + rect.height * 0.5;
-    joyMaxR = Math.max(30, rect.width * 0.38);
+    if (joyTouchId !== null && (!e.touches || findTouchById(e.touches, joyTouchId))) return;
+    const t = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]);
+    if (!t) return;
+    measureJoyRect();
+    joyTouchId = t.identifier;
+    joyPid = null;
+    if (touchJoyBase.classList) touchJoyBase.classList.add('active');
+    updateJoyFromPoint(t.clientX, t.clientY);
+  }, { passive: false });
+  touchJoyBase.addEventListener('touchmove', onJoyTouchMove, { passive: false });
+  touchJoyBase.addEventListener('touchend', onJoyTouchEnd, { passive: false });
+  touchJoyBase.addEventListener('touchcancel', onJoyTouchEnd, { passive: false });
+  touchJoyBase.addEventListener('dblclick', e => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  });
+
+  if (winTarget && typeof winTarget.addEventListener === 'function') {
+    winTarget.addEventListener('touchmove', onJoyTouchMove, { passive: false });
+    winTarget.addEventListener('touchend', onJoyTouchEnd, { passive: false });
+    winTarget.addEventListener('touchcancel', onJoyTouchEnd, { passive: false });
+  }
+
+  // Non-touch pointer fallback for desktop mouse/pen testing (never conflicts with touch*)
+  const onJoyPointerMove = e => {
+    if (!e || e === lastJoyPtrEv || e.pointerType === 'touch') return;
+    if (joyPid === null) return;
+    if (e.pointerId !== undefined && e.pointerId !== joyPid) return;
+    lastJoyPtrEv = e;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    updateJoyFromPoint(e.clientX, e.clientY);
+  };
+
+  const onJoyPointerUp = e => {
+    if (e && (e === lastJoyPtrEv || e.pointerType === 'touch')) return;
+    if (joyPid === null) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== joyPid) return;
+    lastJoyPtrEv = e || null;
+    resetJoy();
+  };
+
+  touchJoyBase.addEventListener('pointerdown', e => {
+    if (!started || e.pointerType === 'touch') return;
+    if (joyTouchId !== null) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    measureJoyRect();
     joyPid = e.pointerId !== undefined ? e.pointerId : 0;
-    if (typeof touchJoyBase.setPointerCapture === 'function' && e.pointerId !== undefined) {
-      try { touchJoyBase.setPointerCapture(e.pointerId); } catch (_) {}
-    }
     if (touchJoyBase.classList) touchJoyBase.classList.add('active');
     updateJoyFromPoint(e.clientX, e.clientY);
   });
-  touchJoyBase.addEventListener('pointermove', e => {
-    if (joyPid < 0) return;
-    if (e.pointerId !== undefined && e.pointerId !== joyPid) return;
-    if (typeof e.preventDefault === 'function') e.preventDefault();
-    updateJoyFromPoint(e.clientX, e.clientY);
+  touchJoyBase.addEventListener('pointermove', onJoyPointerMove);
+  touchJoyBase.addEventListener('pointerup', onJoyPointerUp);
+  touchJoyBase.addEventListener('pointercancel', onJoyPointerUp);
+  touchJoyBase.addEventListener('lostpointercapture', e => {
+    if (joyPid !== null) onJoyPointerUp(e);
   });
-  touchJoyBase.addEventListener('pointerup', e => {
-    if (joyPid < 0 || (e.pointerId !== undefined && e.pointerId !== joyPid)) return;
-    resetJoy();
-  });
-  touchJoyBase.addEventListener('pointercancel', resetJoy);
-  touchJoyBase.addEventListener('lostpointercapture', resetJoy);
+  if (winTarget && typeof winTarget.addEventListener === 'function') {
+    winTarget.addEventListener('pointermove', onJoyPointerMove);
+    winTarget.addEventListener('pointerup', onJoyPointerUp);
+    winTarget.addEventListener('pointercancel', onJoyPointerUp);
+    winTarget.addEventListener('blur', resetJoy);
+  }
 }
 
 function bindTouchBtn(id, onDown, onUp) {
   const el = document.getElementById(id);
   if (!el || typeof el.addEventListener !== 'function') return;
-  let activePid = -1;
-  const release = e => {
-    if (activePid < 0) return;
-    if (e && e.pointerId !== undefined && e.pointerId !== activePid) return;
-    activePid = -1;
+  let activeTouchId = null;
+  let activePid = null;
+
+  const releaseTouch = (e, shouldPrevent) => {
+    if (activeTouchId === null) return;
+    if (e && e.changedTouches) {
+      if (!findTouchById(e.changedTouches, activeTouchId)) return;
+    } else if (e && e.touches && findTouchById(e.touches, activeTouchId)) {
+      return;
+    }
+    if (shouldPrevent && e && e.cancelable !== false && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
+    activeTouchId = null;
     if (el.classList) el.classList.remove('pressed');
     if (typeof onUp === 'function') onUp();
   };
-  el.addEventListener('pointerdown', e => {
+
+  const releasePointer = e => {
+    if (e && e.pointerType === 'touch') return;
+    if (activePid === null) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== activePid) return;
+    activePid = null;
+    if (el.classList) el.classList.remove('pressed');
+    if (typeof onUp === 'function') onUp();
+  };
+
+  el.addEventListener('touchstart', e => {
     if (!started) return;
     if (typeof e.preventDefault === 'function') e.preventDefault();
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (activeTouchId !== null && (!e.touches || findTouchById(e.touches, activeTouchId))) return;
+    const t = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]);
+    if (!t) return;
+    activeTouchId = t.identifier;
+    activePid = null;
+    if (el.classList) el.classList.add('pressed');
+    if (typeof onDown === 'function') onDown();
+  }, { passive: false });
+  el.addEventListener('touchend', e => releaseTouch(e, true), { passive: false });
+  el.addEventListener('touchcancel', e => releaseTouch(e, false), { passive: false });
+  el.addEventListener('dblclick', e => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+  });
+
+  if (winTarget && typeof winTarget.addEventListener === 'function') {
+    winTarget.addEventListener('touchend', e => releaseTouch(e, false), { passive: false });
+    winTarget.addEventListener('touchcancel', e => releaseTouch(e, false), { passive: false });
+  }
+
+  // Non-touch pointer fallback for desktop mouse/pen testing
+  el.addEventListener('pointerdown', e => {
+    if (!started || e.pointerType === 'touch') return;
+    if (activeTouchId !== null) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
     activePid = e.pointerId !== undefined ? e.pointerId : 0;
-    if (typeof el.setPointerCapture === 'function' && e.pointerId !== undefined) {
-      try { el.setPointerCapture(e.pointerId); } catch (_) {}
-    }
     if (el.classList) el.classList.add('pressed');
     if (typeof onDown === 'function') onDown();
   });
-  el.addEventListener('pointerup', release);
-  el.addEventListener('pointercancel', release);
-  el.addEventListener('lostpointercapture', release);
+  el.addEventListener('pointerup', releasePointer);
+  el.addEventListener('pointercancel', releasePointer);
+  el.addEventListener('lostpointercapture', releasePointer);
+  if (winTarget && typeof winTarget.addEventListener === 'function') {
+    winTarget.addEventListener('pointerup', releasePointer);
+    winTarget.addEventListener('pointercancel', releasePointer);
+  }
 }
 
 bindTouchBtn('touchStrike', () => { if (!P.dead) meleeAttack(); });
@@ -3952,8 +4189,6 @@ bindTouchBtn(
 );
 bindTouchBtn('touchRoll', () => { if (!P.dead) Physics.startRoll(true); });
 bindTouchBtn('touchLock', () => { if (!P.dead) Physics.toggleLockOn(); });
-
-let started = false;
 
 Physics.init(renderer.domElement, {
   isStarted: () => started,
@@ -4124,6 +4359,8 @@ const debugHandle = {
   healPlayer,
   damageCompanion,
   respawnPlayer,
+  offscreenLandSpot,
+  evalTouchJoy,
   spawnGloom,
   spawnCocoon,
   spawnWild,
