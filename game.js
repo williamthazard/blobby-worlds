@@ -4015,15 +4015,18 @@ function loop(now) {
   updateCombatVfx(dt);
   updateLockHUD();
   updateChunks(P.x, P.z);
+  const fallbackReg = (!currentRegion || !currentRegion.id) && typeof Regions !== 'undefined' && Regions && typeof Regions.regionAt === 'function'
+    ? Regions.regionAt(P.x, P.z)
+    : null;
   const activeRegionId = currentRegion && currentRegion.id
     ? currentRegion.id
-    : (typeof Regions !== 'undefined' && Regions && typeof Regions.regionAt === 'function' ? Regions.regionAt(P.x, P.z).id : '');
+    : (fallbackReg && fallbackReg.id ? fallbackReg.id : '');
   updateEnvironment(camera.position.y, P.x, P.z, time, dt, activeRegionId);
   if (typeof Shaders !== 'undefined' && Shaders && typeof Shaders.setClothMotion === 'function') {
     const envWindGust = (typeof Env !== 'undefined' && Env && typeof Env.getWindGust === 'function')
       ? Env.getWindGust()
       : null;
-    if (envWindGust !== null) {
+    if (typeof envWindGust === 'number') {
       const uCloth = Shaders.uniforms && Shaders.uniforms.uClothMotion && Shaders.uniforms.uClothMotion.value;
       if (uCloth) {
         Shaders.setClothMotion(uCloth.x, uCloth.y, uCloth.z, envWindGust);

@@ -1032,7 +1032,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       const oz = Math.sin(ang) * rad;
       const oy = 4.35 + (i % 2) * 0.45;
       const tint = 0.82 + (i % 3) * 0.08;
-      parts.push(buildCurvedLeafCard(1.45, 3.65, 0.35, ox, oy, oz, Math.atan2(ox, oz), 1.44, 0, centerY, tint * 0.86, tint * 1.0, tint * 0.82));
+      parts.push(buildCurvedLeafCard(1.45, 3.65, 0.35, ox, oy, oz, Math.atan2(ox, oz), 0.16, 0, centerY, tint * 0.86, tint * 1.0, tint * 0.82));
     }
     return mergeGeometries(parts);
   }

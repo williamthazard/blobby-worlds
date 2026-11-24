@@ -790,13 +790,14 @@ const Regions = (() => {
     };
 
     const addStarRuneCollar = (parent, x, y, z, radius, mat, speed = 2.0, phase = 0) => {
-      const collar = addShadowMesh(gRing, mat, x, y, z, Math.PI * 0.5, 0, 0, radius, radius, 0.48, parent);
+      const collarMat = mat && typeof mat.clone === 'function' ? mat.clone() : mat;
+      const collar = addShadowMesh(gRing, collarMat, x, y, z, Math.PI * 0.5, 0, 0, radius, radius, 0.48, parent);
       collar.castShadow = false;
       collar.userData.isPlaceholder = false;
       for (let k = 0; k < 4; k++) {
         const a = (k / 4) * Math.PI * 2;
         const rune = addShadowMesh(
-          gOrb, mat,
+          gOrb, collarMat,
           x + Math.cos(a) * radius, y, z + Math.sin(a) * radius,
           0, a, 0, 0.14, 0.22, 0.14, parent
         );
@@ -805,7 +806,7 @@ const Regions = (() => {
       }
       animated.push({
         mesh: collar,
-        mat,
+        mat: collarMat,
         kind: 'pulse',
         speed,
         phase,
@@ -1168,7 +1169,7 @@ const Regions = (() => {
             fb,
             [
               { count: 10, rad: 2.35, y: trunkH + 1.1, cardW: 2.6, cardH: 2.4, pitch: 0.34, yJitter: 0.4, bend: 0.5, rMul: 0.88, gMul: 1.02, bMul: 0.82 },
-              { count: 10, rad: 2.55, y: trunkH - 0.7, cardW: 1.4, cardH: 3.2, pitch: 1.42, yJitter: 0.4, bend: 0.35, rMul: 0.86, gMul: 1.00, bMul: 0.80 },
+              { count: 10, rad: 2.55, y: trunkH - 0.7, cardW: 1.4, cardH: 3.2, pitch: 0.16, yJitter: 0.4, bend: 0.35, rMul: 0.86, gMul: 1.00, bMul: 0.80 },
             ],
             oasisLeafMat,
             trunkH + 0.5,

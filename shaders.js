@@ -853,7 +853,12 @@ void main() {
   vec3 cNorm = normal;
   #ifdef USE_INSTANCING
     cWorld = instanceMatrix * cWorld;
-    cNorm = (instanceMatrix * vec4(cNorm, 0.0)).xyz;
+    vec3 ci0 = instanceMatrix[0].xyz;
+    vec3 ci1 = instanceMatrix[1].xyz;
+    vec3 ci2 = instanceMatrix[2].xyz;
+    cNorm = ci0 * (cNorm.x / max(0.0001, dot(ci0, ci0)))
+          + ci1 * (cNorm.y / max(0.0001, dot(ci1, ci1)))
+          + ci2 * (cNorm.z / max(0.0001, dot(ci2, ci2)));
   #endif
   cWorld = modelMatrix * cWorld;
 
@@ -1020,10 +1025,6 @@ void main() {
 
   function patchMaterialHook(mat, tag, compileFn) {
     if (!mat) return mat;
-    if (!mat.userData) mat.userData = {};
-    if (!mat.userData._shaderHooks) mat.userData._shaderHooks = {};
-    if (mat.userData._shaderHooks[tag]) return mat;
-    mat.userData._shaderHooks[tag] = true;
 
     const proto = typeof THREE !== 'undefined' && THREE.Material && THREE.Material.prototype;
     const prevKey = typeof mat.customProgramCacheKey === 'function' && (!proto || mat.customProgramCacheKey !== proto.customProgramCacheKey)
@@ -1033,14 +1034,25 @@ void main() {
       ? mat.onBeforeCompile
       : null;
 
+    const prevTags = prevCompile && prevCompile._hookTags ? prevCompile._hookTags : null;
+    if (prevTags && prevTags[tag]) return mat;
+
+    const hookTags = {};
+    if (prevTags) {
+      for (const k in prevTags) hookTags[k] = prevTags[k];
+    }
+    hookTags[tag] = true;
+
     mat.customProgramCacheKey = function customProgramCacheKey() {
       const base = prevKey ? prevKey.call(this) : '';
       return base ? base + '|' + tag : tag;
     };
-    mat.onBeforeCompile = function onBeforeCompile(shader, renderer) {
+    const wrappedCompile = function onBeforeCompile(shader, renderer) {
       if (prevCompile) prevCompile.call(this, shader, renderer);
       compileFn(shader, renderer);
     };
+    wrappedCompile._hookTags = hookTags;
+    mat.onBeforeCompile = wrappedCompile;
     return mat;
   }
 
