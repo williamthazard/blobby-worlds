@@ -2425,3 +2425,35 @@ test('FPS watchdog steps quality High -> Balanced -> Fast after 3s under 16 FPS'
   wd.enabled = true;
   assert.equal(dbg.stepQualityDown(), 'balanced', 'stepQualityDown must force one tier down');
 });
+
+test('real game loop feeds the FPS watchdog true frame times, so slow devices step down', () => {
+  const run = (fps, seconds, startMs = 1000) => {
+    const { dbg, rafQueue, getQualityState } = loadGameHarness({ hash: '#test' });
+    dbg.setQuality('high');
+    let t = startMs;
+    for (let i = 0; i < fps * seconds; i++) {
+      t += 1000 / fps;
+      rafQueue[rafQueue.length - 1](t);
+    }
+    return { dbg, rafQueue, getQualityState, t };
+  };
+
+  assert.equal(run(10, 5).getQualityState(), 'balanced', '10 FPS for 5s must drop High one tier');
+  assert.equal(run(30, 10).getQualityState(), 'high', '30 FPS must never drop quality');
+  assert.equal(run(20, 10).getQualityState(), 'high', '20 FPS is above the threshold');
+
+  // The title screen does not count: loading stutter must not cost quality
+  const title = loadGameHarness();
+  title.dbg.setQuality('high');
+  for (let i = 1; i <= 50; i++) title.rafQueue[title.rafQueue.length - 1](1000 + i * 100);
+  assert.equal(title.getQualityState(), 'high', 'title screen must not trigger the watchdog');
+
+  // A long gap (hidden tab, laptop sleep) is one slow window, not three in a row
+  const gap = run(60, 2);
+  for (let g = 0, t = gap.t; g < 3; g++) {
+    t += 20000;
+    gap.rafQueue[gap.rafQueue.length - 1](t);
+    for (let i = 0; i < 120; i++) gap.rafQueue[gap.rafQueue.length - 1](t += 1000 / 60);
+  }
+  assert.equal(gap.getQualityState(), 'high', 'a resumed tab must not lose quality');
+});

@@ -4272,9 +4272,11 @@ function stepQualityDown() {
 
 function loop(now) {
   requestAnimationFrame(loop);
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  const frameSec = (now - lastTime) / 1000;
+  const dt = Math.min(frameSec, 0.05);
   lastTime = now;
-  perfWatchdog.tick(dt);
+  // Uncapped time: dt tops out at 0.05s (20 FPS), above the watchdog's threshold
+  if (started) perfWatchdog.tick(frameSec);
   if (!started) {
     updateChunks(P.x, P.z);
     updateChunkCulling(camera);

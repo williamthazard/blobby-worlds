@@ -345,7 +345,8 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     : 2048;
   const initShadowRes = Math.min(QUALITY_SETTINGS[qualityMode].shadowRes, maxTexSize);
   sun.shadow.mapSize.set(initShadowRes, initShadowRes);
-  sun.shadow.bias = -0.0004;
+  const SHADOW_BIAS = -0.0004;
+  sun.shadow.bias = SHADOW_BIAS;
   sun.shadow.normalBias = 0.04;
   sun.shadow.camera.left = -SUN_SHADOW_SPAN * 0.5;
   sun.shadow.camera.right = SUN_SHADOW_SPAN * 0.5;
@@ -2091,8 +2092,12 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       }
     }
 
-    // Fast tier skips the heavy shadow pass entirely
-    sun.castShadow = q.shadows;
+    // Fast skips the heavy shadow pass, but leaves castShadow on once it has been on: that flag is
+    // compiled into every lit shader, and toggling it froze the game ~4s while 35 of them rebuilt.
+    // A bias past the far plane makes getShadow() return "lit" before it samples anything.
+    if (q.shadows) sun.castShadow = true;
+    renderer.shadowMap.autoUpdate = q.shadows;
+    sun.shadow.bias = q.shadows ? SHADOW_BIAS : 2;
 
     // Chunk streaming radius: 7x7 grid on High/Balanced, 3x3 on Fast (horizon ring follows)
     if (VIEW_RADIUS !== q.viewRadius) {

@@ -1534,8 +1534,11 @@ test('Fast quality tier: 3x3 chunk grid, pixel ratio <= 0.9, no shadow pass, clo
   assert.equal(W.getQuality(), 'fast', 'setQuality must accept the fast tier');
   assert.equal(W.getViewRadius(), 1, 'Fast must stream a 3x3 chunk grid (view radius 1)');
   assert.ok(W.renderer.getPixelRatio() <= 0.9, `Fast pixel ratio must be <= 0.9, got ${W.renderer.getPixelRatio()}`);
-  assert.equal(W.sun.castShadow, false, 'Fast tier must disable the heavy shadow pass');
-  assert.equal(W.renderer.shadowMap.enabled, true, 'shadowMap flag stays on; castShadow gates the pass');
+  assert.equal(W.renderer.shadowMap.autoUpdate, false, 'Fast tier must skip the heavy shadow pass');
+  assert.ok(W.sun.shadow.bias > 1, 'Fast bias must push every lookup past the shadow far plane, so nothing is sampled');
+  // Both are compiled into every lit shader: changing either freezes the game while ~35 programs rebuild
+  assert.equal(W.sun.castShadow, true, 'dropping to Fast must not toggle castShadow');
+  assert.equal(W.renderer.shadowMap.enabled, true, 'dropping to Fast must not toggle shadowMap.enabled');
 
   // 3x3 grid: streaming around a point must settle at exactly 9 chunks
   for (let i = 0; i < 20; i++) W.updateChunks(0, 0);
@@ -1573,7 +1576,9 @@ test('Fast quality tier: 3x3 chunk grid, pixel ratio <= 0.9, no shadow pass, clo
   // Back to Balanced restores shadow pass, pixel ratio cap and the 7x7 grid
   W.setQuality('balanced');
   assert.equal(W.getViewRadius(), 3);
-  assert.equal(W.sun.castShadow, true, 'Balanced must re-enable the shadow pass');
+  assert.equal(W.renderer.shadowMap.autoUpdate, true, 'Balanced must re-enable the shadow pass');
+  assert.equal(W.sun.shadow.bias, -0.0004, 'Balanced must restore the shadow bias');
+  assert.equal(W.sun.castShadow, true);
   assert.ok(W.renderer.getPixelRatio() <= 1.25);
   for (let i = 0; i < 60; i++) W.updateChunks(landX, landZ);
   assert.ok(W.chunks.size >= 49, `Expected >=49 chunks on Balanced, got ${W.chunks.size}`);
