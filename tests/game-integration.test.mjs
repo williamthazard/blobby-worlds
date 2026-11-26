@@ -477,7 +477,7 @@ function makeMockThree() {
     constructor(m) { super(); this.material = m; }
   }
   class PointLight extends Object3D {
-    constructor(c, i, d) { super(); this.color = c; this.intensity = i; this.distance = d; }
+    constructor(c, i, d) { super(); this.isPointLight = true; this.color = c; this.intensity = i; this.distance = d; }
   }
   class HemisphereLight extends Object3D {
     constructor(sky, gnd, i = 1) {
@@ -2456,4 +2456,50 @@ test('real game loop feeds the FPS watchdog true frame times, so slow devices st
     for (let i = 0; i < 120; i++) gap.rafQueue[gap.rafQueue.length - 1](t += 1000 / 60);
   }
   assert.equal(gap.getQualityState(), 'high', 'a resumed tab must not lose quality');
+});
+
+test('lighting a totem keeps the point-light count constant, so no shader recompiles', () => {
+  const { dbg, rafQueue, scene } = loadGameHarness({ hash: '#test' });
+  const pointLights = () => {
+    let n = 0;
+    scene.traverse((o) => { if (o.isPointLight) n++; });
+    return n;
+  };
+  const before = pointLights();
+  assert.ok(dbg.getTotem(), 'a totem must exist after Begin');
+  assert.ok(before > 0, 'the totem carries a point light');
+
+  dbg.lightTotem();
+  assert.equal(dbg.getTotem(), null);
+  assert.equal(pointLights(), before, 'removing the lit totem must not change the light count');
+
+  for (let i = 1; i <= 30; i++) rafQueue[rafQueue.length - 1](1000 + i * 16);
+  assert.ok(dbg.getTotem(), 'the next totem spawns after the cooldown');
+  assert.equal(pointLights(), before, 'the next totem must not change the light count either');
+
+  for (let k = 0; k < 7; k++) {
+    dbg.lightTotem();
+    for (let i = 1; i <= 30; i++) rafQueue[rafQueue.length - 1](2000 + k * 1000 + i * 16);
+  }
+  assert.equal(pointLights(), before, 'after all 8 totems the light count is unchanged');
+});
+
+test('first-person view (V) keeps the point-light count constant, so no shader recompiles', () => {
+  const { dbg, scene, win } = loadGameHarness({ hash: '#test' });
+  const visibleLights = () => {
+    let n = 0;
+    const walk = (o) => { if (o.visible === false) return; if (o.isPointLight) n++; (o.children || []).forEach(walk); };
+    walk(scene);
+    return n;
+  };
+  const pressV = () => win.dispatchEvent({ type: 'keydown', code: 'KeyV', key: 'v', repeat: false, preventDefault() {} });
+  const before = visibleLights();
+  assert.ok(dbg.player.userData.staffLight, 'the lantern light exists');
+
+  pressV();
+  assert.equal(dbg.player.visible, false, 'first person hides the player');
+  assert.equal(visibleLights(), before, 'hiding the player must not change the visible light count');
+  pressV();
+  assert.equal(dbg.player.visible, true);
+  assert.equal(visibleLights(), before);
 });

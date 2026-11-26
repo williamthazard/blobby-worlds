@@ -3406,6 +3406,9 @@ let lit = 0;
 let totem = null;
 let totemHintT = 0;
 let totemCooldownT = 0;
+// The lit totem's light stays in the scene at zero until the next totem arrives. Removing it
+// changes the point-light count, which recompiles every lit shader (a multi-second freeze).
+let parkedTotemLight = null;
 
 function spawnTotem() {
   if (totem || lit >= DAY_SKY_MAX_LIT) return;
@@ -3424,6 +3427,10 @@ function spawnTotem() {
   const g = Models.makeTotem();
   g.position.set(spot.x, spot.h, spot.z);
   scene.add(g);
+  if (parkedTotemLight) {
+    scene.remove(parkedTotemLight);
+    parkedTotemLight = null;
+  }
   setTotemCollider(spot.x, spot.z, 1.15);
   const u = g.userData || {};
   totem = {
@@ -3522,6 +3529,12 @@ function lightTotem() {
   );
   questEvent('totem');
   clearTotemCollider();
+  const totemLight = totem.mesh.children.find((c) => c.isPointLight);
+  if (totemLight) {
+    totemLight.intensity = 0;
+    scene.add(totemLight);
+    parkedTotemLight = totemLight;
+  }
   scene.remove(totem.mesh);
   totem = null;
   totemCooldownT = done ? 0 : 0.25;
@@ -4198,6 +4211,10 @@ bindTouchBtn(
 bindTouchBtn('touchRoll', () => { if (!P.dead) Physics.startRoll(true); });
 bindTouchBtn('touchLock', () => { if (!P.dead) Physics.toggleLockOn(); });
 
+// Made on the first V press, not at boot: three.js draws object ids from Math.random, so creating it
+// at boot would shift the world's random spawns.
+let firstPersonLightStandIn = null;
+
 Physics.init(renderer.domElement, {
   isStarted: () => started,
   onShoot: shoot,
@@ -4211,7 +4228,17 @@ Physics.init(renderer.domElement, {
   onSplash: splashBurst,
   onFootprint: stampFootprint,
   getLockCandidates,
-  onPlayerVisible: v => { player.visible = v; },
+  onPlayerVisible: (v) => {
+    player.visible = v;
+    // Hiding the player also hides its lantern light. A zero-intensity stand-in keeps the
+    // point-light count constant, or every lit shader recompiles (~3 s freeze on the first V).
+    if (!firstPersonLightStandIn) {
+      if (v || !(player.userData && player.userData.staffLight) || typeof THREE.PointLight !== 'function') return;
+      firstPersonLightStandIn = new THREE.PointLight(0xffcf64, 0, 16);
+    }
+    if (v) scene.remove(firstPersonLightStandIn);
+    else scene.add(firstPersonLightStandIn);
+  },
 });
 
 renderHeartsUI();
