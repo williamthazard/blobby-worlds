@@ -252,8 +252,18 @@ const Textures = (() => {
     return tex;
   }
 
-  function buildSet(size, heights, albedoPx, roughPx, normalPx, normalStrength, maxAniso) {
+  // lite: 'albedo' keeps only the colour map; 'normal' keeps colour + normal and drops roughness
+  function buildSet(size, heights, albedoPx, roughPx, normalPx, normalStrength, maxAniso, lite) {
+    if (lite === 'albedo') {
+      return { map: makeCanvasTexture(size, albedoPx, THREE.sRGBEncoding, maxAniso, true) };
+    }
     _heightToNormalPixels(heights, size, normalStrength, normalPx);
+    if (lite === 'normal') {
+      return {
+        map: makeCanvasTexture(size, albedoPx, THREE.sRGBEncoding, maxAniso, true),
+        normalMap: makeCanvasTexture(size, normalPx, THREE.LinearEncoding, maxAniso, true),
+      };
+    }
     return {
       map: makeCanvasTexture(size, albedoPx, THREE.sRGBEncoding, maxAniso, true),
       normalMap: makeCanvasTexture(size, normalPx, THREE.LinearEncoding, maxAniso, true),
@@ -1475,7 +1485,11 @@ const Textures = (() => {
     _envScene.add(_sunMesh);
   }
 
+  // Low-end boots skip image-based lighting for the whole session (decided once, at init)
+  let _envEnabled = true;
+
   function updateEnvMap(renderer, scene, topColor, botColor, sunDir, progress = 0) {
+    if (!_envEnabled) return;
     if (!renderer || !scene || typeof THREE === 'undefined' || typeof THREE.PMREMGenerator !== 'function') {
       return;
     }
@@ -1595,7 +1609,11 @@ const Textures = (() => {
     starkeeperFace: null,
     starkeeperIris: null,
 
-    init(renderer) {
+    // opts.lite (low-end boot): albedo-only maps on the standard-material sets and no environment
+    // map. Both are compiled into shaders, so they are chosen here once and never switched.
+    init(renderer, opts) {
+      const lite = !!(opts && opts.lite);
+      _envEnabled = !lite;
       if (typeof THREE === 'undefined' || typeof document === 'undefined') {
         return this.sets;
       }
@@ -1630,7 +1648,10 @@ const Textures = (() => {
       for (let i = 0; i < specs.length; i++) {
         const [name, generator, normalStrength] = specs[i];
         generator(SIZE, heights, albedoPx, roughPx);
-        this.sets[name] = buildSet(SIZE, heights, albedoPx, roughPx, normalPx, normalStrength, maxAniso);
+        // Lite boots: terrain samples rock.normalMap directly, and the stone set's relief is most of
+        // how the Sanctuary dais and the ruins read, so both keep their normal maps
+        const liteMode = !lite ? null : (name === 'rock' ? null : (name === 'stone' ? 'normal' : 'albedo'));
+        this.sets[name] = buildSet(SIZE, heights, albedoPx, roughPx, normalPx, normalStrength, maxAniso, liteMode);
       }
 
       genWaterNormal(SIZE, heights);

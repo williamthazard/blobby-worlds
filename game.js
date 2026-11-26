@@ -3425,6 +3425,11 @@ function spawnTotem() {
   }
   if (!spot) return;
   const g = Models.makeTotem();
+  if (typeof lowEndBoot !== 'undefined' && lowEndBoot) {
+    // Low-end boots never carry a totem light (one less light in every lit shader)
+    const light = g.children.find((c) => c.isPointLight);
+    if (light) g.remove(light);
+  }
   g.position.set(spot.x, spot.h, spot.z);
   scene.add(g);
   if (parkedTotemLight) {

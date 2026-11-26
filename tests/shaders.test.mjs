@@ -833,3 +833,34 @@ test('Review fixes: safe Moon crater rim math, seam-free Milky Way basis, idempo
     'patchUnderwaterCaustics must generate distinct cache keys for distinct intensity values'
   );
 });
+
+test('createTerrainMaterial lite (low-end boot) samples 4 textures per pixel instead of 9 and keeps its own program key', () => {
+  const { S, Textures } = loadShadersWithMocks();
+  const shaderFor = (mat) => {
+    const sh = {
+      uniforms: {},
+      vertexShader: ['#define STANDARD', '#include <common>', 'void main() {', '  #include <worldpos_vertex>', '}'].join('\n'),
+      fragmentShader: ['#define STANDARD', '#include <common>', 'void main() {', '  vec4 diffuseColor = vec4(1.0);', '  float roughnessFactor = 0.8;',
+        '  #include <color_fragment>', '  #include <roughnessmap_fragment>', '  #include <normal_fragment_begin>', '  #include <normal_fragment_maps>', '}'].join('\n'),
+    };
+    mat.onBeforeCompile(sh);
+    return sh;
+  };
+  const samples = (src) => (src.match(/texture2D\(/g) || []).length;
+
+  const full = S.createTerrainMaterial(Textures);
+  const lite = S.createTerrainMaterial(Textures, { lite: true });
+  assert.equal(full.customProgramCacheKey(), 'terrain_pbr_v2', 'the default program is untouched');
+  assert.equal(lite.customProgramCacheKey(), 'terrain_pbr_v2_lite');
+
+  const f = shaderFor(full);
+  const l = shaderFor(lite);
+  assert.equal(samples(f.fragmentShader), 9);
+  assert.equal(samples(l.fragmentShader), 4);
+  for (const sh of [f, l]) {
+    for (const needed of ['uDetailMap', 'uRockMap', 'uRockNormal', 'rockBlend', 'cloudShadow', 'caustic', 'wetness', 'wPerturbed']) {
+      assert.match(sh.fragmentShader, new RegExp(needed), `${needed} must stay in both variants`);
+    }
+  }
+  assert.doesNotMatch(l.fragmentShader, /if \( rockBlend/, 'no texture sampling inside a branch (undefined mip selection)');
+});

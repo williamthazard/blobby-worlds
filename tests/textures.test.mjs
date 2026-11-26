@@ -428,3 +428,30 @@ test('Textures.init executes 2D canvas botanical card rendering cleanly at 512px
   assert.ok(fillCalls >= 48, `Expected >=48 leaf/pinna fills, got ${fillCalls}`);
   assert.ok(strokeCalls >= 60, `Expected >=60 botanical vein/needle strokes, got ${strokeCalls}`);
 });
+
+test('Textures.init lite (low-end boot): albedo-only prop sets (stone keeps relief), no environment map, terrain and water keep their normals', () => {
+  const { THREE, doc, pmremCalls } = makeMockThreeAndDom();
+  const T = loadTexturesWithBrowserMocks({ THREE, document: doc });
+  const mockRenderer = { capabilities: { getMaxAnisotropy: () => 4 } };
+  const sets = T.init(mockRenderer, { lite: true });
+
+  assert.ok(sets.stone.map && sets.stone.normalMap, 'stone keeps its relief (the Sanctuary dais and ruins)');
+  assert.equal(sets.stone.roughnessMap, undefined, 'stone drops only its roughness map');
+  for (const name of ['grass', 'forest', 'sand', 'snow', 'bark', 'leaves', 'cloth', 'leather', 'fur', 'feather', 'scales']) {
+    assert.ok(sets[name] && sets[name].map, `${name} keeps its albedo map`);
+    assert.equal(sets[name].normalMap, undefined, `${name} has no normal map on a lite boot`);
+    assert.equal(sets[name].roughnessMap, undefined, `${name} has no roughness map on a lite boot`);
+  }
+  assert.ok(sets.rock.map && sets.rock.normalMap, 'terrain samples rock.normalMap, so rock keeps it');
+  assert.ok(sets.waterNormal && sets.waterNormal.normalMap, 'water keeps its normal map');
+
+  const scene = new THREE.Scene();
+  T.updateEnvMap(mockRenderer, scene, 0x1a2648, 0x3b4d6e, new THREE.Vector3(0.4, 0.7, 0.3), 0);
+  assert.equal(pmremCalls.created, 0, 'a lite boot never builds the PMREM environment');
+  assert.ok(!scene.environment, 'scene.environment stays empty for the whole session');
+
+  // The default boot is unchanged
+  const T2 = loadTexturesWithBrowserMocks({ THREE, document: doc });
+  const full = T2.init(mockRenderer);
+  assert.ok(full.grass.normalMap && full.grass.roughnessMap, 'default boot keeps every map');
+});

@@ -479,9 +479,13 @@ function makeMockThree() {
   class PointLight extends Object3D {
     constructor(c, i, d) { super(); this.isPointLight = true; this.color = c; this.intensity = i; this.distance = d; }
   }
+  class AmbientLight extends Object3D {
+    constructor(c, i = 1) { super(); this.isAmbientLight = true; this.color = new Color(c); this.intensity = i; }
+  }
   class HemisphereLight extends Object3D {
     constructor(sky, gnd, i = 1) {
       super();
+      this.isHemisphereLight = true;
       this.color = new Color(sky);
       this.groundColor = new Color(gnd);
       this.intensity = i;
@@ -497,6 +501,7 @@ function makeMockThree() {
   class DirectionalLight extends Object3D {
     constructor(c, i = 1) {
       super();
+      this.isDirectionalLight = true;
       this.color = new Color(c);
       this.intensity = i;
       this.target = new Object3D();
@@ -568,6 +573,7 @@ function makeMockThree() {
     Sprite,
     PointLight,
     HemisphereLight,
+    AmbientLight,
     DirectionalLight,
     PerspectiveCamera,
     OrthographicCamera,
@@ -2482,6 +2488,41 @@ test('lighting a totem keeps the point-light count constant, so no shader recomp
     for (let i = 1; i <= 30; i++) rafQueue[rafQueue.length - 1](2000 + k * 1000 + i * 16);
   }
   assert.equal(pointLights(), before, 'after all 8 totems the light count is unchanged');
+});
+
+test('ChromeOS boots pick the low-end profile once: no totem or pearl lights, lite ground, no environment map', () => {
+  const cros = 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+  const lightsUnder = (o) => { let n = 0; o.traverse((c) => { if (c.isPointLight) n++; }); return n; };
+  const terrainKeys = (scene) => { const k = new Set(); scene.traverse((o) => { const m = o.material; if (m && typeof m.customProgramCacheKey === 'function' && /terrain/.test(String(m.customProgramCacheKey()))) k.add(m.customProgramCacheKey()); }); return [...k]; };
+
+  const low = loadGameHarness({ fullWorld: true, userAgent: cros, hash: '#test' });
+  assert.equal(low.dbg.getQuality(), 'fast');
+  assert.equal(lightsUnder(low.dbg.getTotem().mesh), 0, 'low-end totems carry no point light');
+  assert.ok(!low.dbg.worldLandmarks || !low.dbg.worldLandmarks.relicObj || low.dbg.worldLandmarks.relicObj.pearlLight === null, 'no pearl light');
+  for (const k of terrainKeys(low.scene)) assert.equal(k, 'terrain_pbr_v2_lite');
+  assert.ok(!low.scene.environment, 'no environment map on a low-end boot');
+  const fill = low.scene.children.find((o) => o.isAmbientLight);
+  const hemi = low.scene.children.find((o) => o.isHemisphereLight);
+  assert.ok(fill && hemi, 'an ambient fill stands in for the missing environment light');
+  low.dbg.setSkyProgress(4);
+  assert.ok(Math.abs(fill.intensity - hemi.intensity * 2) < 1e-9, 'the fill follows the sky light');
+
+  const sunL = low.scene.children.find((o) => o.isDirectionalLight);
+  assert.equal(sunL.castShadow, true, 'the shadow flag is compiled in from boot, so going up to High never recompiles');
+  assert.equal(low.dbg.renderer.shadowMap.autoUpdate, false, 'Fast still skips the shadow pass');
+  assert.ok(sunL.shadow.bias > 1, 'and every lookup returns lit before sampling');
+  const lowLights = lightsUnder(low.scene);
+  low.dbg.setQuality('high');
+  low.dbg.setQuality('fast');
+  low.dbg.lightTotem();
+  assert.equal(lightsUnder(low.scene), lowLights, 'switching tiers or lighting a totem never changes the light count');
+  assert.equal(sunL.castShadow, true, 'the shadow flag never toggles');
+
+  const normal = loadGameHarness({ fullWorld: true, hash: '#test' });
+  assert.equal(normal.dbg.getQuality(), 'high');
+  assert.equal(lightsUnder(normal.dbg.getTotem().mesh), 1, 'other devices keep the totem light');
+  for (const k of terrainKeys(normal.scene)) assert.equal(k, 'terrain_pbr_v2', 'other devices keep the full ground shader');
+  assert.ok(!normal.scene.children.some((o) => o.isAmbientLight), 'other devices get no ambient fill');
 });
 
 test('first-person view (V) keeps the point-light count constant, so no shader recompiles', () => {

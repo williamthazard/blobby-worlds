@@ -248,6 +248,9 @@ let getSkyProgress = () => 0;
 let updateEnvironment = () => {};
 let addConstellation = () => {};
 let worldLandmarks = null;
+// ChromeOS and software-GPU boots: a cheaper look chosen once at boot (shaders, maps, lights).
+// Never switched later, because changing any of these recompiles every shader.
+let lowEndBoot = false;
 
 if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   // ---------- scene, renderer & lighting ----------
@@ -289,6 +292,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
     }
   }
   const lowEndDevice = detectLowEndDevice();
+  lowEndBoot = lowEndDevice.lowEnd;
 
   // Per-tier performance budget: pixel ratio, shadow pass, water/grass/flower density,
   // streamed chunk radius (3x3 = 9 chunks on Fast), and mist distance.
@@ -328,11 +332,21 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   document.body.appendChild(renderer.domElement);
 
   if (typeof Textures !== 'undefined' && typeof Textures.init === 'function') {
-    Textures.init(renderer);
+    Textures.init(renderer, { lite: lowEndBoot });
   }
 
   hemiLight = new THREE.HemisphereLight(0x9db8d9, 0x3b483d, 0.52);
   scene.add(hemiLight);
+
+  // Low-end boots have no environment map. An ambient fill at 2x the sky light, tinted between
+  // sky and ground, keeps average brightness within about 2% at night, dawn and day.
+  const ambientFill = lowEndBoot && typeof THREE.AmbientLight === 'function' ? new THREE.AmbientLight(0xffffff, 0) : null;
+  if (ambientFill) scene.add(ambientFill);
+  const syncAmbientFill = () => {
+    if (!ambientFill) return;
+    ambientFill.color.copy(hemiLight.color).lerp(hemiLight.groundColor, 0.35);
+    ambientFill.intensity = hemiLight.intensity * 2;
+  };
 
   const SUN_SHADOW_SPAN = 72;
   const _sunDir = new THREE.Vector3(0.45, 0.62, 0.38).normalize();
@@ -358,9 +372,12 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   scene.add(sun);
   scene.add(sun.target);
 
-  // Fast tier boots without the heavy shadow pass
+  // Fast tier boots without the heavy shadow pass. castShadow stays on (it is compiled into every
+  // lit shader, so a later switch to High would recompile them all); the pass is skipped and the
+  // bias makes every lookup return "lit", as setQuality does for Fast.
   if (qualityMode === 'fast') {
-    sun.castShadow = false;
+    renderer.shadowMap.autoUpdate = false;
+    sun.shadow.bias = 2;
     sun.shadow.mapSize.set(Math.min(QUALITY_SETTINGS.fast.shadowRes, maxTexSize), Math.min(QUALITY_SETTINGS.fast.shadowRes, maxTexSize));
   }
 
@@ -1249,7 +1266,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
   }
 
   const terrainMat = (typeof Shaders !== 'undefined' && typeof Shaders.createTerrainMaterial === 'function')
-    ? Shaders.createTerrainMaterial(typeof Textures !== 'undefined' ? Textures : null)
+    ? Shaders.createTerrainMaterial(typeof Textures !== 'undefined' ? Textures : null, { lite: lowEndBoot })
     : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
 
   const waterMat = (typeof Shaders !== 'undefined' && typeof Shaders.createWaterMaterial === 'function')
@@ -2519,6 +2536,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       );
     }
 
+    syncAmbientFill();
     _lastEnvProgress = skyProgress;
     if (typeof Textures !== 'undefined' && typeof Textures.updateEnvMap === 'function') {
       Textures.updateEnvMap(renderer, scene, _skyTop, _skyBot, _shadowLightDir, skyProgress);
@@ -2530,7 +2548,8 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       scene,
       heightAt,
       terrainNormalAt,
-      typeof Textures !== 'undefined' ? Textures : null
+      typeof Textures !== 'undefined' ? Textures : null,
+      { lowEnd: lowEndBoot }
     );
   }
 
@@ -2576,6 +2595,7 @@ if (typeof __WORLD_MATH_ONLY__ === 'undefined') {
       const cel = typeof Env.getCelestialState === 'function' ? Env.getCelestialState() : null;
       if (cel) {
         applyCelestialState(cel);
+        syncAmbientFill();
         if (_litCount >= DAY_SKY_MAX_LIT && Math.abs(skyProgress - _lastEnvProgress) >= 0.12) {
           _lastEnvProgress = skyProgress;
           if (typeof Textures !== 'undefined' && typeof Textures.updateEnvMap === 'function') {

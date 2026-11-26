@@ -398,7 +398,11 @@ const Regions = (() => {
 
   // ---------- Monumental Landmarks & Sunken City Builder ----------
 
-  function buildWorldLandmarks(scene, heightAt, terrainNormalAt, textures) {
+  // opts.lowEnd (low-end boot, decided once): no pearl PointLight, which every lit shader would
+  // otherwise loop over, and swapped GLB props drop their hidden placeholders from the scene graph,
+  // where three.js still updated their matrices every frame (the landmark animation list is unchanged).
+  function buildWorldLandmarks(scene, heightAt, terrainNormalAt, textures, opts) {
+    const lowEnd = !!(opts && opts.lowEnd);
     clearLandmarkColliders();
     const group = new THREE.Group();
     const animated = [];
@@ -553,6 +557,7 @@ const Regions = (() => {
         const swapOpts = {
           fallback,
           keepNonPlaceholders: true,
+          removeFallback: lowEnd,
           castShadow: cfg.castShadow !== undefined ? cfg.castShadow : true,
           receiveShadow: cfg.receiveShadow !== undefined ? cfg.receiveShadow : true,
           deps: {
@@ -1076,7 +1081,7 @@ const Regions = (() => {
     const pearlHalo = makeGlow(0x64f6ee, 3.2, 0.92);
     pearlHalo.position.set(rx, hRelic + 2.88, rz);
     group.add(pearlHalo);
-    const pearlLight = typeof THREE.PointLight === 'function'
+    const pearlLight = !lowEnd && typeof THREE.PointLight === 'function'
       ? new THREE.PointLight(0x5ef2ea, 1.6, 18)
       : null;
     if (pearlLight) {
