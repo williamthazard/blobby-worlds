@@ -1056,7 +1056,71 @@ void main() {
     return mat;
   }
 
-  function createTerrainMaterial(textures) {
+  // Low-end boots (opts.lite): 4 texture samples per pixel instead of 9. One detail scale, no rock
+  // macro tint, one normal sample, no far-turf sheen. Chosen once at boot. The rock samples stay
+  // outside any branch: implicit-LOD sampling inside non-uniform control flow is undefined.
+  const TERRAIN_COLOR_LITE = `#include <color_fragment>
+vec3 tNorm = normalize( vWorldNorm );
+float tSlope = 1.0 - clamp( tNorm.y, 0.0, 1.0 );
+float rockBlend = smoothstep( 0.18, 0.42, tSlope );
+
+vec3 detA = pow( max( texture2D( uDetailMap, vWorldPos.xz * 0.14 ).rgb, vec3( 0.0001 ) ), vec3( 2.2 ) );
+float detLum = dot( detA, vec3( 0.299, 0.587, 0.114 ) );
+float detContrast = clamp( 0.78 + ( detLum - 0.18 ) * 1.40, 0.62, 1.30 );
+vec3 detChroma = mix( vec3( 1.0 ), detA / max( detLum, 0.06 ), 0.16 );
+diffuseColor.rgb *= detContrast * detChroma;
+
+float absX = abs( tNorm.x );
+float absZ = abs( tNorm.z );
+float triW = ( absX * absX ) / max( absX * absX + absZ * absZ, 0.0001 );
+vec3 rockA = pow( max( texture2D( uRockMap, vec2( vWorldPos.z * 0.085, vWorldPos.y * 0.16 ) ).rgb, vec3( 0.0001 ) ), vec3( 2.2 ) );
+vec3 rockB = pow( max( texture2D( uRockMap, vec2( vWorldPos.x * 0.085, vWorldPos.y * 0.16 ) ).rgb, vec3( 0.0001 ) ), vec3( 2.2 ) );
+vec3 rockCol = mix( rockB, rockA, triW );
+vec3 rockTinted = mix( rockCol, rockCol * ( 0.65 + 0.70 * diffuseColor.rgb ), 0.30 );
+float ledgeCap = rockBlend * ( 1.0 - smoothstep( 0.44, 0.76, tSlope ) );
+vec3 ledgeCol = mix( vec3( 0.12, 0.22, 0.08 ), vec3( 0.78, 0.84, 0.90 ), smoothstep( 10.5, 14.5, vWorldPos.y ) );
+float ledgePatch = smoothstep( 0.25, 0.75, detLum * 2.4 );
+rockTinted = mix( rockTinted, ledgeCol, ledgeCap * ledgePatch * 0.42 );
+diffuseColor.rgb = mix( diffuseColor.rgb, rockTinted, rockBlend );
+
+float wetShore = ( 1.0 - smoothstep( 0.0, 0.85, abs( vWorldPos.y - uWaterY ) ) ) * ( 1.0 - rockBlend * 0.55 );
+diffuseColor.rgb *= ( 1.0 - wetShore * 0.28 );
+
+vec2 csUv = ( vWorldPos.xz - uCloudOffset ) * 0.016;
+float csA = sin( csUv.x * 1.7 + cos( csUv.y * 1.3 + 0.8 ) ) * 0.5 + 0.5;
+float csB = sin( csUv.x * 3.1 - csUv.y * 2.4 + 1.9 ) * 0.5 + 0.5;
+float cloudShadow = smoothstep( 0.46, 0.84, csA * 0.62 + csB * 0.38 );
+float sunDayVis = ( 1.0 - clamp( uNightFactor, 0.0, 1.0 ) * 0.78 ) * smoothstep( 0.02, 0.25, uSunDir.y );
+float aboveWaterT = smoothstep( -0.4, 0.6, vWorldPos.y - uWaterY );
+diffuseColor.rgb *= ( 1.0 - cloudShadow * 0.23 * sunDayVis * aboveWaterT );
+
+float subDepth = uWaterY - vWorldPos.y;
+if ( subDepth > -0.15 ) {
+  float fadeIn = smoothstep( -0.15, 0.25, subDepth );
+  float depthAtten = exp( -max( subDepth, 0.0 ) * 0.24 );
+  vec2 cUv = vWorldPos.xz * 0.32 + uSunDir.xz * ( max( subDepth, 0.0 ) * 0.18 );
+  float c1 = sin( cUv.x * 2.1 + uTime * 1.4 + cos( cUv.y * 1.9 - uTime * 1.1 ) );
+  float c2 = cos( cUv.y * 2.4 - uTime * 1.25 + sin( cUv.x * 1.7 + uTime * 0.95 ) );
+  float c3 = sin( ( cUv.x - cUv.y ) * 1.6 + uTime * 0.85 );
+  float caustic = pow( clamp( 1.0 - abs( c1 + c2 ) * 0.42, 0.0001, 1.0 ), 4.0 )
+                + pow( clamp( 1.0 - abs( c2 - c3 ) * 0.48, 0.0001, 1.0 ), 5.0 ) * 0.55;
+  float sunUp = clamp( uSunDir.y * 1.35 + 0.25, 0.15, 1.0 );
+  diffuseColor.rgb += vec3( 0.22, 0.46, 0.48 ) * ( caustic * fadeIn * depthAtten * sunUp * 0.62 );
+}`;
+
+  const TERRAIN_NORMAL_LITE = `#include <normal_fragment_maps>
+vec3 rn = texture2D( uRockNormal, vWorldPos.xz * 0.16 ).xyz * 2.0 - 1.0;
+vec3 refAxis = abs( tNorm.x ) < 0.9 ? vec3( 1.0, 0.0, 0.0 ) : vec3( 0.0, 0.0, 1.0 );
+vec3 wT = normalize( cross( tNorm, refAxis ) );
+vec3 wB = cross( tNorm, wT );
+vec3 wPerturbed = normalize( tNorm + ( wT * rn.x + wB * rn.y ) * ( 0.14 + rockBlend * 0.74 ) );
+normal = normalize( ( viewMatrix * vec4( wPerturbed, 0.0 ) ).xyz );
+#ifdef DOUBLE_SIDED
+  normal = normal * ( float( gl_FrontFacing ) * 2.0 - 1.0 );
+#endif`;
+
+  function createTerrainMaterial(textures, opts) {
+    const lite = !!(opts && opts.lite);
     const sets = resolveTextureSets(textures);
     const detailMap = (sets && sets.grass && sets.grass.map) || getFallbackTexture(false);
     const rockMap = (sets && sets.rock && sets.rock.map) || getFallbackTexture(false);
@@ -1067,7 +1131,7 @@ void main() {
       roughness: 0.86,
       metalness: 0.02,
     });
-    mat.customProgramCacheKey = () => 'terrain_pbr_v2';
+    mat.customProgramCacheKey = () => (lite ? 'terrain_pbr_v2_lite' : 'terrain_pbr_v2');
 
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uniforms.uTime;
@@ -1115,7 +1179,7 @@ varying vec3 vWorldNorm;`
         )
         .replace(
           '#include <color_fragment>',
-          `#include <color_fragment>
+          lite ? TERRAIN_COLOR_LITE : `#include <color_fragment>
 vec3 tNorm = normalize( vWorldNorm );
 float tSlope = 1.0 - clamp( tNorm.y, 0.0, 1.0 );
 float rockBlend = smoothstep( 0.18, 0.42, tSlope );
@@ -1197,7 +1261,7 @@ roughnessFactor = mix( roughnessFactor, 0.32, wetness * ( 1.0 - rockBlend * 0.35
         )
         .replace(
           '#include <normal_fragment_maps>',
-          `#include <normal_fragment_maps>
+          lite ? TERRAIN_NORMAL_LITE : `#include <normal_fragment_maps>
 vec3 rnFlat = texture2D( uRockNormal, vWorldPos.xz * 0.16 ).xyz * 2.0 - 1.0;
 vec3 rnA = texture2D( uRockNormal, cliffUvA ).xyz * 2.0 - 1.0;
 vec3 rnB = texture2D( uRockNormal, cliffUvB ).xyz * 2.0 - 1.0;

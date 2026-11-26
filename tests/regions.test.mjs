@@ -484,3 +484,21 @@ test('Sub-Project 4 landmarks: botanical Hollow Great-Tree canopy, underwater ca
   const fbTreeCards = fbMeshes.filter((m) => m.userData && m.userData.isGreatTreeCanopy && m.geometry && m.geometry.kind === 'plane');
   assert.ok(fbTreeCards.length >= 20, `Expected multi-tier PlaneGeometry botanical cards on fallback canopy, got ${fbTreeCards.length}`);
 });
+
+test('buildWorldLandmarks lowEnd: no pearl light, and swapped GLB props drop their hidden placeholders', () => {
+  const nFn = (_x, _z, out) => { out.x = 0; out.y = 1; out.z = 0; return out; };
+  const lightsIn = (group) => { let n = 0; group.traverse((o) => { if (o.isPointLight || (o.constructor && o.constructor.name === 'PointLight')) n++; }); return n; };
+
+  const full = loadRegions(true, { withEnv: true });
+  const builtFull = full.Regions.buildWorldLandmarks(new full.THREE.Scene(), (x, z) => full.Regions.getElevationMod(x, z, 2.0), nFn, { sets: {} });
+  assert.ok(builtFull.relicObj.pearlLight, 'the default build keeps the pearl light');
+  assert.equal(lightsIn(builtFull.group), 1);
+  assert.ok(full.nodeSwaps.length > 0 && full.nodeSwaps.every((s) => !s.opts.removeFallback), 'default build keeps placeholders, as before');
+
+  const low = loadRegions(true, { withEnv: true });
+  const builtLow = low.Regions.buildWorldLandmarks(new low.THREE.Scene(), (x, z) => low.Regions.getElevationMod(x, z, 2.0), nFn, { sets: {} }, { lowEnd: true });
+  assert.equal(builtLow.relicObj.pearlLight, null, 'low-end boots never create the pearl light');
+  assert.equal(lightsIn(builtLow.group), 0);
+  assert.ok(builtLow.relicObj.pearlMesh && builtLow.relicObj.pearlHalo, 'the pearl itself and its glow stay');
+  assert.ok(low.nodeSwaps.length === full.nodeSwaps.length && low.nodeSwaps.every((s) => s.opts.removeFallback === true), 'every swapped prop drops its hidden placeholder');
+});
